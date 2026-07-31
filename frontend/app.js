@@ -1,5 +1,5 @@
-// app.js
-const API = '/api';
+// app.js - التعديل الجذري: الاتصال المباشر بالـ Worker
+const API = 'https://support-agent-worker.mohamed-elfal.workers.dev/api';
 let token = localStorage.getItem('token') || null;
 
 // --- المصادقة ---
@@ -11,12 +11,15 @@ async function login() {
         return;
     }
     try {
+        console.log('Sending login request to:', `${API}/auth/login`);
         const res = await fetch(`${API}/auth/login`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ email: email.trim() }),
         });
+        console.log('Response status:', res.status);
         const data = await res.json();
+        console.log('Response data:', data);
         if (data.token) {
             token = data.token;
             localStorage.setItem('token', token);
@@ -27,6 +30,7 @@ async function login() {
             alert('فشل الدخول: ' + (data.error || 'خطأ غير معروف'));
         }
     } catch (e) {
+        console.error('Login error:', e);
         alert('خطأ في الاتصال بالخادم');
     }
 }
