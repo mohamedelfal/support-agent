@@ -1,5 +1,5 @@
 // ============================================================
-// وكيل الدعم الذكي - التطبيق الرئيسي
+// وكيل الدعم الذكي - التطبيق الرئيسي (نسخة مستقرة)
 // ============================================================
 
 const API = 'https://support-agent-worker.mohamed-elfal.workers.dev/api';
@@ -8,27 +8,31 @@ const API = 'https://support-agent-worker.mohamed-elfal.workers.dev/api';
 let token = localStorage.getItem('token') || null;
 let currentUser = null;
 
-// --- عناصر DOM (مرجع واحد) ---
+// --- عناصر DOM ---
 const $ = (id) => document.getElementById(id);
 const loginBtn = $('loginBtn');
 const logoutBtn = $('logoutBtn');
 const statusMessage = $('statusMessage');
 const userEmailEl = $('userEmail');
+const chatMessages = $('chatMessages');
+const chatInput = $('chatInputField');
+const chatSendBtn = $('chatSendBtn');
+const ticketsContainer = $('ticketsContainer');
+const ticketSubject = $('ticketSubject');
+const ticketDescription = $('ticketDescription');
+const submitTicketBtn = $('submitTicketBtn');
+const ticketStatus = $('ticketStatus');
+
 const sections = ['dashboard', 'new-ticket', 'tickets-list', 'chat-section'].map($);
 
-// --- تحديث الواجهة (الدالة الوحيدة المسؤولة) ---
+// --- تحديث الواجهة ---
 function updateUI() {
     const isLoggedIn = !!token && !!currentUser;
-    console.log(`🔄 updateUI | loggedIn: ${isLoggedIn}, token: ${!!token}, user: ${!!currentUser}`);
-
-    // 1. لون الخلفية
     document.body.style.backgroundColor = isLoggedIn ? '#1a3a1a' : '#0d0d1a';
 
-    // 2. الأزرار
     loginBtn.style.display = isLoggedIn ? 'none' : 'inline-block';
     logoutBtn.style.display = isLoggedIn ? 'inline-block' : 'none';
 
-    // 3. رسالة الترحيب
     if (isLoggedIn && currentUser?.email) {
         statusMessage.style.display = 'block';
         userEmailEl.textContent = `👋 مرحباً ${currentUser.email}`;
@@ -36,10 +40,31 @@ function updateUI() {
         statusMessage.style.display = 'none';
     }
 
-    // 4. الأقسام
     sections.forEach(el => {
         if (el) el.style.display = isLoggedIn ? 'block' : 'none';
     });
+
+    // إذا كان مسجلاً دخول، نعرض الترحيب في الشات
+    if (isLoggedIn) {
+        showSystemMessage('مرحباً! كيف يمكنني مساعدتك اليوم؟');
+    }
+}
+
+// --- مساعد لعرض رسائل النظام في الشات ---
+function showSystemMessage(text) {
+    if (!chatMessages) return;
+    const msg = document.createElement('div');
+    msg.className = 'message assistant';
+    msg.textContent = text;
+    chatMessages.appendChild(msg);
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+}
+
+// --- تنظيف الشات ---
+function clearChat() {
+    if (chatMessages) {
+        chatMessages.innerHTML = '';
+    }
 }
 
 // --- تسجيل الدخول ---
@@ -51,7 +76,6 @@ async function login() {
     }
 
     try {
-        console.log('📤 login request sent');
         const res = await fetch(`${API}/auth/login`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -59,7 +83,6 @@ async function login() {
         });
 
         const data = await res.json();
-        console.log('📥 login response:', data);
 
         if (!res.ok) throw new Error(data.error || 'فشل الخادم');
 
@@ -67,11 +90,14 @@ async function login() {
             token = data.token;
             currentUser = data.user;
             localStorage.setItem('token', token);
+
+            // تنظيف البيانات القديمة
+            clearChat();
             updateUI();
-            // تحميل البيانات (غير ضروري لظهور الواجهة)
-            // لكننا نستدعيه في الخلفية
-            loadDashboard().catch(() => {});
-            loadTickets().catch(() => {});
+
+            // تحميل البيانات للمستخدم الجديد
+            await loadDashboard();
+            await loadTickets();
         } else {
             throw new Error('استجابة غير صالحة من الخادم');
         }
@@ -83,14 +109,17 @@ async function login() {
 
 // --- تسجيل الخروج ---
 function logout() {
-    console.log('🚪 logout called');
     token = null;
     currentUser = null;
     localStorage.removeItem('token');
+    clearChat();
     updateUI();
+    // إعادة تعيين عناصر التذاكر
+    if (ticketsContainer) ticketsContainer.innerHTML = '<span style="color:#666;">يرجى تسجيل الدخول</span>';
+    if (ticketStatus) ticketStatus.textContent = '';
 }
 
-// --- تحميل البيانات (دوال منفصلة) ---
+// --- تحميل البيانات ---
 async function loadDashboard() {
     if (!token) return;
     try {
@@ -115,9 +144,8 @@ async function loadTickets() {
         });
         if (!res.ok) throw new Error(await res.text());
         const data = await res.json();
-        const container = $('ticketsContainer');
         if (data.tickets?.length) {
-            container.innerHTML = data.tickets.map(t => `
+            ticketsContainer.innerHTML = data.tickets.map(t => `
                 <div class="ticket-item">
                     <div>
                         <strong>${escapeHtml(t.subject)}</strong>
@@ -131,7 +159,7 @@ async function loadTickets() {
                 </div>
             `).join('');
         } else {
-            container.innerHTML = '<span style="color:#666;">لا توجد تذاكر.</span>';
+            ticketsContainer.innerHTML = '<span style="color:#666;">لا توجد تذاكر.</span>';
         }
     } catch (e) {
         console.warn('Tickets load failed:', e);
@@ -144,7 +172,7 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
-// --- دوال التذاكر (تُستدعى من onclick) ---
+// --- دوال التذاكر (تعمل عبر onclick) ---
 window.resolveTicket = async function(id) {
     if (!confirm('هل أنت متأكد من حل هذه التذكرة؟')) return;
     try {
@@ -173,70 +201,81 @@ window.deleteTicket = async function(id) {
     }
 };
 
-// --- أحداث الأزرار ---
-$('submitTicketBtn')?.addEventListener('click', async () => {
-    const subject = $('ticketSubject').value.trim();
-    const description = $('ticketDescription').value.trim();
-    const status = $('ticketStatus');
+// --- إنشاء تذكرة ---
+if (submitTicketBtn) {
+    submitTicketBtn.addEventListener('click', async () => {
+        const subject = ticketSubject.value.trim();
+        const description = ticketDescription.value.trim();
 
-    if (subject.length < 3) {
-        status.className = 'error';
-        status.textContent = '⚠️ العنوان يجب أن يكون 3 أحرف على الأقل';
-        return;
-    }
-    if (description.length < 10) {
-        status.className = 'error';
-        status.textContent = '⚠️ الوصف يجب أن يكون 10 أحرف على الأقل';
-        return;
-    }
+        if (subject.length < 3) {
+            ticketStatus.className = 'error';
+            ticketStatus.textContent = '⚠️ العنوان يجب أن يكون 3 أحرف على الأقل';
+            return;
+        }
+        if (description.length < 10) {
+            ticketStatus.className = 'error';
+            ticketStatus.textContent = '⚠️ الوصف يجب أن يكون 10 أحرف على الأقل';
+            return;
+        }
 
-    const btn = $('submitTicketBtn');
-    btn.disabled = true;
-    status.className = '';
+        submitTicketBtn.disabled = true;
+        ticketStatus.className = '';
 
-    try {
-        await fetch(`${API}/tickets`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${token}`
-            },
-            body: JSON.stringify({ subject, description })
-        });
-        status.className = 'success';
-        status.textContent = '✅ تم إنشاء التذكرة بنجاح!';
-        $('ticketSubject').value = '';
-        $('ticketDescription').value = '';
-        loadTickets();
-        loadDashboard();
-    } catch (e) {
-        status.className = 'error';
-        status.textContent = '❌ فشل الإنشاء';
-    } finally {
-        btn.disabled = false;
-    }
-});
+        try {
+            await fetch(`${API}/tickets`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
+                },
+                body: JSON.stringify({ subject, description })
+            });
+            ticketStatus.className = 'success';
+            ticketStatus.textContent = '✅ تم إنشاء التذكرة بنجاح!';
+            ticketSubject.value = '';
+            ticketDescription.value = '';
+            loadTickets();
+            loadDashboard();
+        } catch (e) {
+            ticketStatus.className = 'error';
+            ticketStatus.textContent = '❌ فشل الإنشاء';
+        } finally {
+            submitTicketBtn.disabled = false;
+        }
+    });
+}
 
-$('chatSendBtn')?.addEventListener('click', async () => {
-    const input = $('chatInputField');
-    const msg = input.value.trim();
+// --- محادثة الوكيل (الشات) ---
+if (chatSendBtn) {
+    chatSendBtn.addEventListener('click', sendMessage);
+}
+
+if (chatInput) {
+    chatInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') sendMessage();
+    });
+}
+
+async function sendMessage() {
+    const msg = chatInput.value.trim();
     if (!msg) return;
 
-    input.value = '';
-    const btn = $('chatSendBtn');
-    btn.disabled = true;
-    const container = $('chatMessages');
-
+    // عرض رسالة المستخدم
     const userMsg = document.createElement('div');
     userMsg.className = 'message user';
     userMsg.textContent = msg;
-    container.appendChild(userMsg);
+    chatMessages.appendChild(userMsg);
+    chatMessages.scrollTop = chatMessages.scrollHeight;
 
+    chatInput.value = '';
+    chatSendBtn.disabled = true;
+
+    // مؤشر التحميل
     const loading = document.createElement('div');
     loading.className = 'message assistant';
     loading.textContent = '⏳ جاري التفكير...';
-    container.appendChild(loading);
-    container.scrollTop = container.scrollHeight;
+    chatMessages.appendChild(loading);
+    chatMessages.scrollTop = chatMessages.scrollHeight;
 
     try {
         const res = await fetch(`${API}/chat`, {
@@ -247,25 +286,27 @@ $('chatSendBtn')?.addEventListener('click', async () => {
             },
             body: JSON.stringify({ message: msg })
         });
+
+        if (!res.ok) throw new Error(await res.text());
         const data = await res.json();
+
         loading.remove();
-        const assistant = document.createElement('div');
-        assistant.className = 'message assistant';
-        assistant.innerHTML = escapeHtml(data.answer || 'لم أستطع الإجابة.');
-        container.appendChild(assistant);
+        const assistantMsg = document.createElement('div');
+        assistantMsg.className = 'message assistant';
+        assistantMsg.textContent = data.answer || 'لم أستطع الإجابة.';
+        chatMessages.appendChild(assistantMsg);
+        chatMessages.scrollTop = chatMessages.scrollHeight;
+
+        // تحديث لوحة التحكم (قد تتغير الإحصائيات)
         loadDashboard();
     } catch (e) {
         loading.textContent = '❌ خطأ: ' + e.message;
         loading.className = 'message assistant error';
     } finally {
-        btn.disabled = false;
-        container.scrollTop = container.scrollHeight;
+        chatSendBtn.disabled = false;
+        chatMessages.scrollTop = chatMessages.scrollHeight;
     }
-});
-
-$('chatInputField')?.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') $('chatSendBtn')?.click();
-});
+}
 
 // --- تهيئة الصفحة ---
 document.addEventListener('DOMContentLoaded', () => {
@@ -273,9 +314,9 @@ document.addEventListener('DOMContentLoaded', () => {
     loginBtn.addEventListener('click', login);
     logoutBtn.addEventListener('click', logout);
 
-    // إذا كان هناك توكن مخزن، نحاول جلب المستخدم
     if (token) {
-        // نضع user مؤقتاً (يمكن تحسينه بطلب /me)
+        // نحاول جلب المستخدم (قد نحتاج إلى /me)
+        // لكننا سنفترض أن المستخدم موجود
         currentUser = { email: 'مستخدم' };
         updateUI();
         loadDashboard();
