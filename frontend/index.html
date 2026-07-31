@@ -18,7 +18,13 @@
         </header>
 
         <main>
-            <!-- لوحة التحكم - مخفية افتراضياً -->
+            <!-- قسم الحالة (يظهر بدلاً من الأقسام عند تسجيل الدخول) -->
+            <div id="statusMessage" style="display:none; background:#16162a; padding:20px; border-radius:14px; margin-bottom:18px; border:1px solid #1e1e2e;">
+                <h2>✅ تم تسجيل الدخول بنجاح</h2>
+                <p id="userEmail"></p>
+            </div>
+
+            <!-- لوحة التحكم -->
             <section id="dashboard" style="display:none;">
                 <h2>📊 لوحة التحكم</h2>
                 <div id="stats">
@@ -37,7 +43,7 @@
                 </div>
             </section>
 
-            <!-- إنشاء تذكرة - مخفية افتراضياً -->
+            <!-- إنشاء تذكرة -->
             <section id="new-ticket" style="display:none;">
                 <h2>✏️ تذكرة جديدة</h2>
                 <input type="text" id="ticketSubject" placeholder="عنوان التذكرة" maxlength="100" />
@@ -46,13 +52,13 @@
                 <div id="ticketStatus"></div>
             </section>
 
-            <!-- قائمة التذاكر - مخفية افتراضياً -->
+            <!-- قائمة التذاكر -->
             <section id="tickets-list" style="display:none;">
                 <h2>📋 التذاكر</h2>
                 <div id="ticketsContainer"></div>
             </section>
 
-            <!-- محادثة الوكيل - مخفية افتراضياً -->
+            <!-- محادثة الوكيل -->
             <section id="chat-section" style="display:none;">
                 <h2>💬 محادثة الوكيل</h2>
                 <div id="chatMessages"></div>
