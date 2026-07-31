@@ -1,5 +1,4 @@
 -- تهيئة قاعدة البيانات
-
 CREATE TABLE users (
     id TEXT PRIMARY KEY,
     email TEXT UNIQUE NOT NULL,
@@ -33,9 +32,7 @@ CREATE TABLE audit_logs (
     created_at TEXT NOT NULL
 );
 
--- مؤشرات
 CREATE INDEX idx_tickets_user ON tickets(user_id);
 CREATE INDEX idx_tickets_status ON tickets(status);
 CREATE INDEX idx_chat_user ON chat_logs(user_id);
 CREATE INDEX idx_audit_user ON audit_logs(user_id);
-CREATE INDEX idx_audit_time ON audit_logs(created_at);
