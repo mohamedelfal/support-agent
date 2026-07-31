@@ -1,5 +1,4 @@
-
-// worker/src/index.ts
+// src/index.ts
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { authMiddleware } from './middleware/auth';
@@ -7,6 +6,10 @@ import { rateLimitMiddleware } from './middleware/rate-limit';
 import auth from './routes/auth';
 import tickets from './routes/tickets';
 import chat from './routes/chat';
+
+// ⬇️ أضف هذين السطرين ⬇️
+import { RateLimiter } from './durable/rate-limiter';
+export { RateLimiter };
 
 type Env = {
   DB: D1Database;
@@ -19,29 +22,22 @@ type Env = {
 
 const app = new Hono<{ Bindings: Env }>();
 
-// CORS
 app.use('*', cors({
-  origin: ['https://support-agent-dxu.pages.dev/', 'http://localhost:3000'],
+  origin: ['https://your-domain.pages.dev', 'http://localhost:3000'],
   allowMethods: ['GET', 'POST', 'PUT', 'DELETE'],
   allowHeaders: ['Content-Type', 'Authorization'],
   maxAge: 86400,
 }));
 
-// نقطة الصحة
 app.get('/', (c) => c.json({
   status: 'ok',
   service: 'Support Agent',
   version: '1.0.0'
 }));
 
-// المسارات العامة
 app.route('/api/auth', auth);
-
-// الحماية
 app.use('/api/*', authMiddleware);
 app.use('/api/*', rateLimitMiddleware);
-
-// المسارات المحمية
 app.route('/api/tickets', tickets);
 app.route('/api/chat', chat);
 
