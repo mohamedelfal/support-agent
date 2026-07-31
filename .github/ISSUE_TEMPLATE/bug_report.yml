@@ -1,0 +1,54 @@
+name: ✨ Feature Request
+description: Suggest an idea for this project
+title: "[FEATURE]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for suggesting a feature!
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Is this related to a problem?
+      description: A clear description of the problem
+      placeholder: I'm frustrated when...
+    validations:
+      required: false
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed Solution
+      description: What you want to happen
+      placeholder: Add a new endpoint that...
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+      description: Any alternative solutions or workarounds
+      placeholder: We could also...
+    validations:
+      required: false
+
+  - type: textarea
+    id: usecase
+    attributes:
+      label: Use Case
+      description: How would this feature be used in a real-world scenario?
+      placeholder: This would help users who...
+    validations:
+      required: true
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional Context
+      description: Screenshots, mockups, or other context
+      placeholder: Add any other context here
+    validations:
+      required: false
