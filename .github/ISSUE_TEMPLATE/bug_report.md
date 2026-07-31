@@ -1,5 +1,5 @@
 ---
-name: 🐛 Bug Report
+name:  Bug Report
 about: أبلغ عن خطأ لمساعدتنا على التحسين
 title: '[BUG] '
 labels: bug
