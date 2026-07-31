@@ -1,5 +1,5 @@
 // ============================================================
-// وكيل الدعم الذكي - التطبيق الرئيسي (نسخة مستقرة)
+// وكيل الدعم الذكي - النسخة النهائية المستقرة
 // ============================================================
 
 const API = 'https://support-agent-worker.mohamed-elfal.workers.dev/api';
@@ -22,47 +22,43 @@ const ticketSubject = $('ticketSubject');
 const ticketDescription = $('ticketDescription');
 const submitTicketBtn = $('submitTicketBtn');
 const ticketStatus = $('ticketStatus');
-
 const sections = ['dashboard', 'new-ticket', 'tickets-list', 'chat-section'].map($);
 
 // --- تحديث الواجهة ---
 function updateUI() {
     const isLoggedIn = !!token && !!currentUser;
     document.body.style.backgroundColor = isLoggedIn ? '#1a3a1a' : '#0d0d1a';
-
     loginBtn.style.display = isLoggedIn ? 'none' : 'inline-block';
     logoutBtn.style.display = isLoggedIn ? 'inline-block' : 'none';
-
     if (isLoggedIn && currentUser?.email) {
         statusMessage.style.display = 'block';
         userEmailEl.textContent = `👋 مرحباً ${currentUser.email}`;
     } else {
         statusMessage.style.display = 'none';
     }
-
-    sections.forEach(el => {
-        if (el) el.style.display = isLoggedIn ? 'block' : 'none';
-    });
+    sections.forEach(el => { if (el) el.style.display = isLoggedIn ? 'block' : 'none'; });
 }
 
-// --- دالة API موحدة (السر في حل المشكلة) ---
+// --- دالة API موحدة (مع إصلاح التوكن) ---
 async function apiCall(endpoint, options = {}) {
-    if (!token) {
-        throw new Error('لا يوجد توكن، يرجى تسجيل الدخول');
-    }
+    if (!token) throw new Error('لا يوجد توكن، يرجى تسجيل الدخول');
+
+    // تنظيف التوكن من أي مسافات
+    const cleanToken = token.trim();
 
     const headers = {
         'Content-Type': 'application/json',
         ...(options.headers || {}),
-        'Authorization': `Bearer ${token}`  // 🔑 إرسال التوكن بشكل صحيح
+        'Authorization': `Bearer ${cleanToken}`  // 🔑 إرسال التوكن بشكل صحيح
     };
+
+    console.log(`📤 Sending ${options.method || 'GET'} to ${endpoint} with token: ${cleanToken.substring(0, 10)}...`);
 
     const res = await fetch(`${API}${endpoint}`, {
         ...options,
         headers,
     });
 
-    // إذا كان التوكن غير صالح، نسجل الخروج
     if (res.status === 401) {
         logout();
         throw new Error('انتهت صلاحية الجلسة، يرجى تسجيل الدخول مجدداً');
@@ -95,19 +91,15 @@ async function login() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ email: email.trim() }),
         });
-
         const data = await res.json();
-
         if (!res.ok) throw new Error(data.error || 'فشل الخادم');
-
         if (data.token && data.user) {
-            token = data.token;
+            token = data.token.trim();  // تنظيف التوكن
             currentUser = data.user;
             localStorage.setItem('token', token);
             updateUI();
             await loadDashboard();
             await loadTickets();
-            // رسالة ترحيب في الشات
             if (chatMessages) {
                 chatMessages.innerHTML = '';
                 const msg = document.createElement('div');
@@ -212,7 +204,6 @@ if (submitTicketBtn) {
     submitTicketBtn.addEventListener('click', async () => {
         const subject = ticketSubject.value.trim();
         const description = ticketDescription.value.trim();
-
         if (subject.length < 3) {
             ticketStatus.className = 'error';
             ticketStatus.textContent = '⚠️ العنوان يجب أن يكون 3 أحرف على الأقل';
@@ -223,10 +214,8 @@ if (submitTicketBtn) {
             ticketStatus.textContent = '⚠️ الوصف يجب أن يكون 10 أحرف على الأقل';
             return;
         }
-
         submitTicketBtn.disabled = true;
         ticketStatus.className = '';
-
         try {
             await apiCall('/tickets', {
                 method: 'POST',
@@ -252,7 +241,6 @@ if (submitTicketBtn) {
 if (chatSendBtn) {
     chatSendBtn.addEventListener('click', sendMessage);
 }
-
 if (chatInput) {
     chatInput.addEventListener('keydown', (e) => {
         if (e.key === 'Enter') sendMessage();
@@ -281,7 +269,7 @@ async function sendMessage() {
     chatMessages.scrollTop = chatMessages.scrollHeight;
 
     try {
-        // 🔑 استخدم الدالة apiCall الموحدة
+        // 🔑 استخدم apiCall مع التأكد من التوكن
         const data = await apiCall('/chat', {
             method: 'POST',
             body: JSON.stringify({ message: msg })
@@ -293,7 +281,6 @@ async function sendMessage() {
         assistantMsg.textContent = data.answer || 'لم أستطع الإجابة.';
         chatMessages.appendChild(assistantMsg);
         chatMessages.scrollTop = chatMessages.scrollHeight;
-
         loadDashboard();
     } catch (e) {
         loading.textContent = '❌ خطأ: ' + e.message;
@@ -312,8 +299,8 @@ document.addEventListener('DOMContentLoaded', () => {
     console.log('✅ DOM loaded');
     loginBtn.addEventListener('click', login);
     logoutBtn.addEventListener('click', logout);
-
     if (token) {
+        token = token.trim(); // تنظيف التوكن المخزن
         currentUser = { email: 'مستخدم' };
         updateUI();
         loadDashboard();
