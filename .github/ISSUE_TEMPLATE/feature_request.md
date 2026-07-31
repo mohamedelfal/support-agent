@@ -1,5 +1,5 @@
 ---
-name: ✨ Feature Request
+name:  Feature Request
 about: اقترح فكرة لهذا المشروع
 title: '[FEATURE] '
 labels: enhancement
