@@ -11,27 +11,28 @@ async function login() {
         return;
     }
     try {
-        console.log('Sending login request to:', `${API}/auth/login`);
         const res = await fetch(`${API}/auth/login`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ email: email.trim() }),
         });
-        console.log('Response status:', res.status);
         const data = await res.json();
-        console.log('Response data:', data);
         if (data.token) {
             token = data.token;
             localStorage.setItem('token', token);
-            updateUI();
-            loadDashboard();
-            loadTickets();
+            // ❌ تم إزالة updateUI() من هنا لتجنب التعارض
+            // سيتم استدعاؤها في نهاية الدالة
+            // ولكننا سنستدعيها مباشرة بعد حفظ التوكن
+            updateUI(); // تأكد من استدعائها هنا
+            // تحميل البيانات بعد التحديث
+            await loadDashboard();
+            await loadTickets();
         } else {
             alert('فشل الدخول: ' + (data.error || 'خطأ غير معروف'));
         }
     } catch (e) {
-        console.error('Login error:', e);
         alert('خطأ في الاتصال بالخادم');
+        console.error(e);
     }
 }
 
@@ -39,17 +40,43 @@ function logout() {
     token = null;
     localStorage.removeItem('token');
     updateUI();
+    // إخفاء الأقسام عند تسجيل الخروج
+    document.querySelectorAll('section').forEach(el => el.style.display = 'none');
 }
 
 function updateUI() {
-    console.log('updateUI called, token:', token);
-    document.getElementById('loginBtn').style.display = token ? 'none' : 'inline-block';
-    document.getElementById('logoutBtn').style.display = token ? 'inline-block' : 'none';
+    // ✅ تحسين updateUI() لجعلها أكثر وضوحًا
+    const loginBtn = document.getElementById('loginBtn');
+    const logoutBtn = document.getElementById('logoutBtn');
     const sections = ['dashboard', 'new-ticket', 'tickets-list', 'chat-section'];
-    sections.forEach(id => {
-        const el = document.getElementById(id);
-        if (el) el.style.display = token ? 'block' : 'none';
-    });
+    
+    if (token) {
+        // إظهار أزرار الخروج وإخفاء أزرار الدخول
+        loginBtn.style.display = 'none';
+        logoutBtn.style.display = 'inline-block';
+        // إظهار الأقسام
+        sections.forEach(id => {
+            const el = document.getElementById(id);
+            if (el) {
+                el.style.display = 'block';
+                el.style.visibility = 'visible'; // للتأكد من الظهور
+            }
+        });
+        console.log('✅ UI updated: Logged in');
+    } else {
+        // إظهار أزرار الدخول وإخفاء أزرار الخروج
+        loginBtn.style.display = 'inline-block';
+        logoutBtn.style.display = 'none';
+        // إخفاء الأقسام
+        sections.forEach(id => {
+            const el = document.getElementById(id);
+            if (el) {
+                el.style.display = 'none';
+                el.style.visibility = 'hidden';
+            }
+        });
+        console.log('❌ UI updated: Logged out');
+    }
 }
 
 // --- استدعاء API موحد ---
@@ -254,6 +281,7 @@ document.getElementById('chatInputField').addEventListener('keydown', (e) => {
 
 // --- الأحداث الرئيسية ---
 document.addEventListener('DOMContentLoaded', () => {
+    console.log('✅ DOM loaded');
     document.getElementById('loginBtn').addEventListener('click', login);
     document.getElementById('logoutBtn').addEventListener('click', logout);
     updateUI();
