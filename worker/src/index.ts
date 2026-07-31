@@ -21,7 +21,7 @@ const app = new Hono<{ Bindings: Env }>();
 
 // CORS
 app.use('*', cors({
-  origin: ['https://your-domain.pages.dev', 'http://localhost:3000'],
+  origin: ['https://support-agent-dxu.pages.dev/', 'http://localhost:3000'],
   allowMethods: ['GET', 'POST', 'PUT', 'DELETE'],
   allowHeaders: ['Content-Type', 'Authorization'],
   maxAge: 86400,
