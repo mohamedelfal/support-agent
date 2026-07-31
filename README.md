@@ -176,7 +176,7 @@ support-agent/
 ### 1. Fork & Clone
 
 ```bash
-git clone https://github.com/your-username/support-agent.git
+git clone https://github.com/mohamedelfal/support-agent.git
 cd support-agent
 ```
 
