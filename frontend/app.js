@@ -45,19 +45,40 @@ function updateUI() {
     });
 }
 
-// --- مساعد لعرض رسائل النظام في الشات ---
-function showSystemMessage(text, isError = false) {
-    if (!chatMessages) return;
-    const msg = document.createElement('div');
-    msg.className = `message assistant ${isError ? 'error' : ''}`;
-    msg.textContent = text;
-    chatMessages.appendChild(msg);
-    chatMessages.scrollTop = chatMessages.scrollHeight;
-}
+// --- دالة API موحدة (السر في حل المشكلة) ---
+async function apiCall(endpoint, options = {}) {
+    if (!token) {
+        throw new Error('لا يوجد توكن، يرجى تسجيل الدخول');
+    }
 
-// --- تنظيف الشات ---
-function clearChat() {
-    if (chatMessages) chatMessages.innerHTML = '';
+    const headers = {
+        'Content-Type': 'application/json',
+        ...(options.headers || {}),
+        'Authorization': `Bearer ${token}`  // 🔑 إرسال التوكن بشكل صحيح
+    };
+
+    const res = await fetch(`${API}${endpoint}`, {
+        ...options,
+        headers,
+    });
+
+    // إذا كان التوكن غير صالح، نسجل الخروج
+    if (res.status === 401) {
+        logout();
+        throw new Error('انتهت صلاحية الجلسة، يرجى تسجيل الدخول مجدداً');
+    }
+
+    if (!res.ok) {
+        const text = await res.text();
+        try {
+            const json = JSON.parse(text);
+            throw new Error(json.error || text);
+        } catch {
+            throw new Error(text);
+        }
+    }
+
+    return res.json();
 }
 
 // --- تسجيل الدخول ---
@@ -83,13 +104,17 @@ async function login() {
             token = data.token;
             currentUser = data.user;
             localStorage.setItem('token', token);
-
-            clearChat();
             updateUI();
-
             await loadDashboard();
             await loadTickets();
-            showSystemMessage('مرحباً! كيف يمكنني مساعدتك اليوم؟');
+            // رسالة ترحيب في الشات
+            if (chatMessages) {
+                chatMessages.innerHTML = '';
+                const msg = document.createElement('div');
+                msg.className = 'message assistant';
+                msg.textContent = 'مرحباً! كيف يمكنني مساعدتك اليوم؟';
+                chatMessages.appendChild(msg);
+            }
         } else {
             throw new Error('استجابة غير صالحة من الخادم');
         }
@@ -104,46 +129,10 @@ function logout() {
     token = null;
     currentUser = null;
     localStorage.removeItem('token');
-    clearChat();
+    if (chatMessages) chatMessages.innerHTML = '';
     updateUI();
     if (ticketsContainer) ticketsContainer.innerHTML = '<span style="color:#666;">يرجى تسجيل الدخول</span>';
     if (ticketStatus) ticketStatus.textContent = '';
-}
-
-// --- استدعاء API مع إعادة محاولة التوكن ---
-async function apiCall(endpoint, options = {}) {
-    if (!token) {
-        throw new Error('لا يوجد توكن، يرجى تسجيل الدخول');
-    }
-
-    const headers = {
-        'Content-Type': 'application/json',
-        ...(options.headers || {}),
-        'Authorization': `Bearer ${token}`
-    };
-
-    const res = await fetch(`${API}${endpoint}`, {
-        ...options,
-        headers,
-    });
-
-    if (res.status === 401) {
-        // التوكن غير صالح، نقوم بتسجيل الخروج
-        logout();
-        throw new Error('انتهت صلاحية الجلسة، يرجى تسجيل الدخول مجدداً');
-    }
-
-    if (!res.ok) {
-        const text = await res.text();
-        try {
-            const json = JSON.parse(text);
-            throw new Error(json.error || text);
-        } catch {
-            throw new Error(text);
-        }
-    }
-
-    return res.json();
 }
 
 // --- تحميل البيانات ---
@@ -259,7 +248,7 @@ if (submitTicketBtn) {
     });
 }
 
-// --- محادثة الوكيل (الشات) ---
+// --- محادثة الوكيل (الشات) - الحل النهائي ---
 if (chatSendBtn) {
     chatSendBtn.addEventListener('click', sendMessage);
 }
@@ -292,7 +281,7 @@ async function sendMessage() {
     chatMessages.scrollTop = chatMessages.scrollHeight;
 
     try {
-        // استخدم الدالة apiCall الموحدة
+        // 🔑 استخدم الدالة apiCall الموحدة
         const data = await apiCall('/chat', {
             method: 'POST',
             body: JSON.stringify({ message: msg })
@@ -329,7 +318,12 @@ document.addEventListener('DOMContentLoaded', () => {
         updateUI();
         loadDashboard();
         loadTickets();
-        showSystemMessage('مرحباً! كيف يمكنني مساعدتك اليوم؟');
+        if (chatMessages) {
+            const msg = document.createElement('div');
+            msg.className = 'message assistant';
+            msg.textContent = 'مرحباً! كيف يمكنني مساعدتك اليوم؟';
+            chatMessages.appendChild(msg);
+        }
     } else {
         updateUI();
     }
