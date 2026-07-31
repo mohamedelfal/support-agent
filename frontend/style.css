@@ -159,6 +159,16 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 
 #ticketStatus { margin-top: 10px; font-size: 14px; color: #888; }
 
+#statusMessage {
+    background: #16162a;
+    padding: 20px;
+    border-radius: 14px;
+    margin-bottom: 18px;
+    border: 1px solid #00b894;
+}
+#statusMessage h2 { color: #00b894; }
+#statusMessage p { color: #888; margin-top: 8px; }
+
 footer {
     text-align: center;
     color: #333;
