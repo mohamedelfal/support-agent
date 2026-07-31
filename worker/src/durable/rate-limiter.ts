@@ -1,4 +1,4 @@
-// worker/src/durable/rate-limiter.ts
+// src/durable/rate-limiter.ts
 import { DurableObject } from 'cloudflare:workers';
 
 export class RateLimiter extends DurableObject {
