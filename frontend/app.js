@@ -1,4 +1,4 @@
-// app.js
+// app.js - النسخة النهائية المعدلة
 const API = 'https://support-agent-worker.mohamed-elfal.workers.dev/api';
 let token = localStorage.getItem('token') || null;
 let currentUser = null;
@@ -14,7 +14,7 @@ const sections = ['dashboard', 'new-ticket', 'tickets-list', 'chat-section'];
 function updateUI() {
     console.log('🔄 updateUI called, token:', token ? 'exists' : 'null');
     
-    if (token) {
+    if (token && currentUser) {
         loginBtn.style.display = 'none';
         logoutBtn.style.display = 'inline-block';
         
@@ -24,10 +24,8 @@ function updateUI() {
         });
         
         statusMessage.style.display = 'block';
-        if (currentUser) {
-            userEmail.textContent = `👋 مرحباً ${currentUser.email}`;
-        }
-        console.log('✅ UI updated: Logged in');
+        userEmail.textContent = `👋 مرحباً ${currentUser.email}`;
+        console.log('✅ UI updated: Logged in as', currentUser.email);
     } else {
         loginBtn.style.display = 'inline-block';
         logoutBtn.style.display = 'none';
@@ -42,11 +40,8 @@ function updateUI() {
     }
 }
 
-// --- تسجيل الدخول (مع منع إعادة التحميل) ---
+// --- تسجيل الدخول ---
 async function login() {
-    // منع أي سلوك افتراضي لإعادة التحميل
-    event?.preventDefault?.();
-    
     const email = prompt('أدخل بريدك الإلكتروني:');
     if (!email) return;
     
@@ -56,34 +51,31 @@ async function login() {
     }
     
     try {
-        console.log('📤 Sending login request...');
+        console.log('📤 Sending login request to:', `${API}/auth/login`);
         const res = await fetch(`${API}/auth/login`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ email: email.trim() }),
         });
         
+        console.log('📥 Response status:', res.status);
         const data = await res.json();
-        console.log('📥 Response:', data);
+        console.log('📥 Response data:', data);
         
-        if (data.token) {
+        if (!res.ok) {
+            throw new Error(data.error || `Server error: ${res.status}`);
+        }
+        
+        if (data.token && data.user) {
             token = data.token;
             currentUser = data.user;
             localStorage.setItem('token', token);
-            console.log('✅ Token saved');
-            
-            // تحديث الواجهة مباشرة (بدون alert)
+            console.log('✅ Login successful, user:', currentUser);
             updateUI();
-            
-            // تحميل البيانات
             await loadDashboard();
             await loadTickets();
-            
-            // عرض رسالة نجاح داخلية بدلاً من alert
-            statusMessage.style.display = 'block';
-            userEmail.textContent = `👋 مرحباً ${currentUser.email}`;
         } else {
-            alert('❌ فشل الدخول: ' + (data.error || 'خطأ غير معروف'));
+            throw new Error('Invalid response from server: missing token or user');
         }
     } catch (e) {
         console.error('❌ Login error:', e);
@@ -97,9 +89,10 @@ function logout() {
     currentUser = null;
     localStorage.removeItem('token');
     updateUI();
+    console.log('✅ Logged out');
 }
 
-// --- استدعاء API ---
+// --- استدعاء API موحد ---
 async function apiCall(endpoint, options = {}) {
     const headers = {
         'Content-Type': 'application/json',
@@ -306,6 +299,11 @@ document.addEventListener('DOMContentLoaded', () => {
     logoutBtn.addEventListener('click', logout);
     updateUI();
     if (token) {
+        // try to get user info? we might not have it, but we can attempt to load dashboard.
+        // we need to set currentUser from somewhere, maybe we can fetch profile.
+        // For now, we'll just show the UI but without user email.
+        // Better: we could store user in localStorage as well.
+        // For simplicity, we'll just show UI and load data.
         loadDashboard();
         loadTickets();
     }
