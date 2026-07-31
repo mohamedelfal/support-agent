@@ -1,82 +1,110 @@
 // app.js
 const API = 'https://support-agent-worker.mohamed-elfal.workers.dev/api';
 let token = localStorage.getItem('token') || null;
+let currentUser = null;
 
-// --- المصادقة ---
+// --- عناصر DOM ---
+const loginBtn = document.getElementById('loginBtn');
+const logoutBtn = document.getElementById('logoutBtn');
+const sections = ['dashboard', 'new-ticket', 'tickets-list', 'chat-section'];
+const statusMessage = document.getElementById('statusMessage');
+const userEmail = document.getElementById('userEmail');
+
+// --- تحديث الواجهة ---
+function updateUI() {
+    console.log('🔄 updateUI called, token:', token ? 'exists' : 'null');
+    
+    if (token) {
+        // إظهار أزرار الخروج
+        loginBtn.style.display = 'none';
+        logoutBtn.style.display = 'inline-block';
+        
+        // إظهار جميع الأقسام
+        sections.forEach(id => {
+            const el = document.getElementById(id);
+            if (el) {
+                el.style.display = 'block';
+                console.log(`✅ Showing section: ${id}`);
+            }
+        });
+        
+        // إظهار رسالة الترحيب
+        statusMessage.style.display = 'block';
+        if (currentUser) {
+            userEmail.textContent = `👋 مرحباً ${currentUser.email}`;
+        }
+        
+        console.log('✅ UI updated: Logged in');
+    } else {
+        // إخفاء كل شيء
+        loginBtn.style.display = 'inline-block';
+        logoutBtn.style.display = 'none';
+        
+        sections.forEach(id => {
+            const el = document.getElementById(id);
+            if (el) {
+                el.style.display = 'none';
+                console.log(`❌ Hiding section: ${id}`);
+            }
+        });
+        
+        statusMessage.style.display = 'none';
+        console.log('❌ UI updated: Logged out');
+    }
+}
+
+// --- تسجيل الدخول ---
 async function login() {
     const email = prompt('أدخل بريدك الإلكتروني:');
     if (!email) return;
+    
     if (!email.includes('@') || !email.includes('.')) {
         alert('يرجى إدخال بريد إلكتروني صحيح');
         return;
     }
+    
     try {
+        console.log('📤 Sending login request to:', `${API}/auth/login`);
         const res = await fetch(`${API}/auth/login`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ email: email.trim() }),
         });
+        
+        console.log('📥 Response status:', res.status);
         const data = await res.json();
+        console.log('📥 Response data:', data);
+        
         if (data.token) {
             token = data.token;
+            currentUser = data.user;
             localStorage.setItem('token', token);
-            // ❌ تم إزالة updateUI() من هنا لتجنب التعارض
-            // سيتم استدعاؤها في نهاية الدالة
-            // ولكننا سنستدعيها مباشرة بعد حفظ التوكن
-            updateUI(); // تأكد من استدعائها هنا
-            // تحميل البيانات بعد التحديث
+            console.log('✅ Token saved:', token.substring(0, 20) + '...');
+            
+            // تحديث الواجهة
+            updateUI();
+            
+            // تحميل البيانات
             await loadDashboard();
             await loadTickets();
+            
+            alert('✅ تم تسجيل الدخول بنجاح!');
         } else {
-            alert('فشل الدخول: ' + (data.error || 'خطأ غير معروف'));
+            alert('❌ فشل الدخول: ' + (data.error || 'خطأ غير معروف'));
         }
     } catch (e) {
-        alert('خطأ في الاتصال بالخادم');
-        console.error(e);
+        console.error('❌ Login error:', e);
+        alert('❌ خطأ في الاتصال بالخادم: ' + e.message);
     }
 }
 
+// --- تسجيل الخروج ---
 function logout() {
     token = null;
+    currentUser = null;
     localStorage.removeItem('token');
     updateUI();
-    // إخفاء الأقسام عند تسجيل الخروج
-    document.querySelectorAll('section').forEach(el => el.style.display = 'none');
-}
-
-function updateUI() {
-    // ✅ تحسين updateUI() لجعلها أكثر وضوحًا
-    const loginBtn = document.getElementById('loginBtn');
-    const logoutBtn = document.getElementById('logoutBtn');
-    const sections = ['dashboard', 'new-ticket', 'tickets-list', 'chat-section'];
-    
-    if (token) {
-        // إظهار أزرار الخروج وإخفاء أزرار الدخول
-        loginBtn.style.display = 'none';
-        logoutBtn.style.display = 'inline-block';
-        // إظهار الأقسام
-        sections.forEach(id => {
-            const el = document.getElementById(id);
-            if (el) {
-                el.style.display = 'block';
-                el.style.visibility = 'visible'; // للتأكد من الظهور
-            }
-        });
-        console.log('✅ UI updated: Logged in');
-    } else {
-        // إظهار أزرار الدخول وإخفاء أزرار الخروج
-        loginBtn.style.display = 'inline-block';
-        logoutBtn.style.display = 'none';
-        // إخفاء الأقسام
-        sections.forEach(id => {
-            const el = document.getElementById(id);
-            if (el) {
-                el.style.display = 'none';
-                el.style.visibility = 'hidden';
-            }
-        });
-        console.log('❌ UI updated: Logged out');
-    }
+    alert('✅ تم تسجيل الخروج');
 }
 
 // --- استدعاء API موحد ---
@@ -118,8 +146,9 @@ async function loadDashboard() {
         document.getElementById('ticketsCount').textContent = data.openTickets || 0;
         document.getElementById('resolvedCount').textContent = data.resolvedToday || 0;
         document.getElementById('avgTime').textContent = data.avgResponseTime || '~2s';
+        console.log('📊 Dashboard loaded:', data);
     } catch (e) {
-        console.error('Dashboard error:', e);
+        console.error('❌ Dashboard error:', e);
     }
 }
 
@@ -144,11 +173,12 @@ async function loadTickets() {
                     </div>
                 </div>
             `).join('');
+            console.log('📋 Tickets loaded:', data.tickets.length);
         } else {
             container.innerHTML = '<span style="color:#666;">لا توجد تذاكر.</span>';
         }
     } catch (e) {
-        console.error('Tickets error:', e);
+        console.error('❌ Tickets error:', e);
         document.getElementById('ticketsContainer').innerHTML =
             '<span class="error">فشل تحميل التذاكر</span>';
     }
@@ -167,7 +197,7 @@ async function resolveTicket(id) {
         loadTickets();
         loadDashboard();
     } catch (e) {
-        alert('فشل حل التذكرة: ' + e.message);
+        alert('❌ فشل حل التذكرة: ' + e.message);
     }
 }
 
@@ -178,7 +208,7 @@ async function deleteTicket(id) {
         loadTickets();
         loadDashboard();
     } catch (e) {
-        alert('فشل الحذف: ' + e.message);
+        alert('❌ فشل الحذف: ' + e.message);
     }
 }
 
@@ -282,8 +312,8 @@ document.getElementById('chatInputField').addEventListener('keydown', (e) => {
 // --- الأحداث الرئيسية ---
 document.addEventListener('DOMContentLoaded', () => {
     console.log('✅ DOM loaded');
-    document.getElementById('loginBtn').addEventListener('click', login);
-    document.getElementById('logoutBtn').addEventListener('click', logout);
+    loginBtn.addEventListener('click', login);
+    logoutBtn.addEventListener('click', logout);
     updateUI();
     if (token) {
         loadDashboard();
@@ -291,5 +321,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 });
 
+// جعل الدوال عامة للاستخدام في onclick
 window.resolveTicket = resolveTicket;
 window.deleteTicket = deleteTicket;
