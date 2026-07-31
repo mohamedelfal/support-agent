@@ -18,8 +18,8 @@
         </header>
 
         <main>
-            <!-- لوحة التحكم -->
-            <section id="dashboard">
+            <!-- لوحة التحكم - مخفية افتراضياً -->
+            <section id="dashboard" style="display:none;">
                 <h2>📊 لوحة التحكم</h2>
                 <div id="stats">
                     <div class="stat-card">
@@ -37,8 +37,8 @@
                 </div>
             </section>
 
-            <!-- إنشاء تذكرة -->
-            <section id="new-ticket">
+            <!-- إنشاء تذكرة - مخفية افتراضياً -->
+            <section id="new-ticket" style="display:none;">
                 <h2>✏️ تذكرة جديدة</h2>
                 <input type="text" id="ticketSubject" placeholder="عنوان التذكرة" maxlength="100" />
                 <textarea id="ticketDescription" placeholder="وصف المشكلة..." maxlength="1000"></textarea>
@@ -46,14 +46,14 @@
                 <div id="ticketStatus"></div>
             </section>
 
-            <!-- قائمة التذاكر -->
-            <section id="tickets-list">
+            <!-- قائمة التذاكر - مخفية افتراضياً -->
+            <section id="tickets-list" style="display:none;">
                 <h2>📋 التذاكر</h2>
                 <div id="ticketsContainer"></div>
             </section>
 
-            <!-- محادثة الوكيل -->
-            <section id="chat-section">
+            <!-- محادثة الوكيل - مخفية افتراضياً -->
+            <section id="chat-section" style="display:none;">
                 <h2>💬 محادثة الوكيل</h2>
                 <div id="chatMessages"></div>
                 <div id="chatInput">
