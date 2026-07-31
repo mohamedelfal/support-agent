@@ -6,9 +6,7 @@ const WINDOW_SECONDS = 60;
 
 export async function rateLimitMiddleware(c: Context, next: () => Promise<void>) {
   const user = c.get('user');
-  if (!user) {
-    return c.json({ error: 'Unauthorized' }, 401);
-  }
+  if (!user) return c.json({ error: 'Unauthorized' }, 401);
 
   const userId = user.sub;
   const limiter = c.env.RATE_LIMITER;
