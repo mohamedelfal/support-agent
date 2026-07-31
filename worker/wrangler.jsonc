@@ -8,7 +8,7 @@
     {
       "binding": "DB",
       "database_name": "support-agent-db",
-      "database_id": "YOUR_D1_DATABASE_ID"
+      "database_id": "76811492-6188-4e6e-92af-1e2d33b3f279"
     }
   ],
   "durable_objects": {
