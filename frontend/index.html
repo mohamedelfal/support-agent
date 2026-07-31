@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>🤖 وكيل الدعم الذكي</title>
+    <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+    <div id="app">
+        <header>
+            <h1>🤖 وكيل الدعم الذكي</h1>
+            <p>خدمة عملاء آلية بالكامل</p>
+            <div id="auth">
+                <button id="loginBtn">🔑 دخول</button>
+                <button id="logoutBtn" style="display:none;">🚪 خروج</button>
+            </div>
+        </header>
+
+        <main>
+            <!-- لوحة التحكم -->
+            <section id="dashboard">
+                <h2>📊 لوحة التحكم</h2>
+                <div id="stats">
+                    <div class="stat-card">
+                        <span class="stat-number" id="ticketsCount">0</span>
+                        <span class="stat-label">التذاكر المفتوحة</span>
+                    </div>
+                    <div class="stat-card">
+                        <span class="stat-number" id="resolvedCount">0</span>
+                        <span class="stat-label">تم الحل اليوم</span>
+                    </div>
+                    <div class="stat-card">
+                        <span class="stat-number" id="avgTime">~2s</span>
+                        <span class="stat-label">متوسط وقت الرد</span>
+                    </div>
+                </div>
+            </section>
+
+            <!-- إنشاء تذكرة -->
+            <section id="new-ticket">
+                <h2>✏️ تذكرة جديدة</h2>
+                <input type="text" id="ticketSubject" placeholder="عنوان التذكرة" maxlength="100" />
+                <textarea id="ticketDescription" placeholder="وصف المشكلة..." maxlength="1000"></textarea>
+                <button id="submitTicketBtn">📨 إرسال التذكرة</button>
+                <div id="ticketStatus"></div>
+            </section>
+
+            <!-- قائمة التذاكر -->
+            <section id="tickets-list">
+                <h2>📋 التذاكر</h2>
+                <div id="ticketsContainer"></div>
+            </section>
+
+            <!-- محادثة الوكيل -->
+            <section id="chat-section">
+                <h2>💬 محادثة الوكيل</h2>
+                <div id="chatMessages"></div>
+                <div id="chatInput">
+                    <input type="text" id="chatInputField" placeholder="اسأل الوكيل..." maxlength="500" />
+                    <button id="chatSendBtn">📨 إرسال</button>
+                </div>
+            </section>
+        </main>
+
+        <footer>
+            <p>🚀 Cloudflare Zero-Cost | <a href="#">GitHub</a></p>
+        </footer>
+    </div>
+    <script src="app.js"></script>
+</body>
+</html>
