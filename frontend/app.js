@@ -1,4 +1,4 @@
-// app.js - التعديل الجذري: الاتصال المباشر بالـ Worker
+// app.js
 const API = 'https://support-agent-worker.mohamed-elfal.workers.dev/api';
 let token = localStorage.getItem('token') || null;
 
@@ -42,6 +42,7 @@ function logout() {
 }
 
 function updateUI() {
+    console.log('updateUI called, token:', token);
     document.getElementById('loginBtn').style.display = token ? 'none' : 'inline-block';
     document.getElementById('logoutBtn').style.display = token ? 'inline-block' : 'none';
     const sections = ['dashboard', 'new-ticket', 'tickets-list', 'chat-section'];
