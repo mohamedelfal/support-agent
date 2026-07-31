@@ -1,4 +1,4 @@
-<p align="center">
+6<p align="center">
   <img src="https://img.shields.io/badge/version-1.0.0-blue.svg" alt="Version" />
   <img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License" />
   <img src="https://img.shields.io/badge/Cloudflare-F38020?logo=cloudflare&logoColor=white" alt="Cloudflare" />
@@ -30,7 +30,7 @@
 
 ---
 
-# 📋 Overview
+## 📋 Overview
 
 **Support Agent Platform** is a fully autonomous AI-powered customer support system that handles tickets, answers customer queries, and tracks resolution status — all without human intervention. Built on Cloudflare's serverless ecosystem, it costs **$0/month** within free tier limits.
 
