@@ -3,49 +3,38 @@ const API = 'https://support-agent-worker.mohamed-elfal.workers.dev/api';
 let token = localStorage.getItem('token') || null;
 let currentUser = null;
 
-// --- عناصر DOM ---
+// عناصر DOM
 const loginBtn = document.getElementById('loginBtn');
 const logoutBtn = document.getElementById('logoutBtn');
-const sections = ['dashboard', 'new-ticket', 'tickets-list', 'chat-section'];
 const statusMessage = document.getElementById('statusMessage');
 const userEmail = document.getElementById('userEmail');
+const sections = ['dashboard', 'new-ticket', 'tickets-list', 'chat-section'];
 
 // --- تحديث الواجهة ---
 function updateUI() {
     console.log('🔄 updateUI called, token:', token ? 'exists' : 'null');
     
     if (token) {
-        // إظهار أزرار الخروج
         loginBtn.style.display = 'none';
         logoutBtn.style.display = 'inline-block';
         
-        // إظهار جميع الأقسام
         sections.forEach(id => {
             const el = document.getElementById(id);
-            if (el) {
-                el.style.display = 'block';
-                console.log(`✅ Showing section: ${id}`);
-            }
+            if (el) el.style.display = 'block';
         });
         
-        // إظهار رسالة الترحيب
         statusMessage.style.display = 'block';
         if (currentUser) {
             userEmail.textContent = `👋 مرحباً ${currentUser.email}`;
         }
-        
         console.log('✅ UI updated: Logged in');
     } else {
-        // إخفاء كل شيء
         loginBtn.style.display = 'inline-block';
         logoutBtn.style.display = 'none';
         
         sections.forEach(id => {
             const el = document.getElementById(id);
-            if (el) {
-                el.style.display = 'none';
-                console.log(`❌ Hiding section: ${id}`);
-            }
+            if (el) el.style.display = 'none';
         });
         
         statusMessage.style.display = 'none';
@@ -53,8 +42,11 @@ function updateUI() {
     }
 }
 
-// --- تسجيل الدخول ---
+// --- تسجيل الدخول (مع منع إعادة التحميل) ---
 async function login() {
+    // منع أي سلوك افتراضي لإعادة التحميل
+    event?.preventDefault?.();
+    
     const email = prompt('أدخل بريدك الإلكتروني:');
     if (!email) return;
     
@@ -64,31 +56,32 @@ async function login() {
     }
     
     try {
-        console.log('📤 Sending login request to:', `${API}/auth/login`);
+        console.log('📤 Sending login request...');
         const res = await fetch(`${API}/auth/login`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ email: email.trim() }),
         });
         
-        console.log('📥 Response status:', res.status);
         const data = await res.json();
-        console.log('📥 Response data:', data);
+        console.log('📥 Response:', data);
         
         if (data.token) {
             token = data.token;
             currentUser = data.user;
             localStorage.setItem('token', token);
-            console.log('✅ Token saved:', token.substring(0, 20) + '...');
+            console.log('✅ Token saved');
             
-            // تحديث الواجهة
+            // تحديث الواجهة مباشرة (بدون alert)
             updateUI();
             
             // تحميل البيانات
             await loadDashboard();
             await loadTickets();
             
-            alert('✅ تم تسجيل الدخول بنجاح!');
+            // عرض رسالة نجاح داخلية بدلاً من alert
+            statusMessage.style.display = 'block';
+            userEmail.textContent = `👋 مرحباً ${currentUser.email}`;
         } else {
             alert('❌ فشل الدخول: ' + (data.error || 'خطأ غير معروف'));
         }
@@ -104,10 +97,9 @@ function logout() {
     currentUser = null;
     localStorage.removeItem('token');
     updateUI();
-    alert('✅ تم تسجيل الخروج');
 }
 
-// --- استدعاء API موحد ---
+// --- استدعاء API ---
 async function apiCall(endpoint, options = {}) {
     const headers = {
         'Content-Type': 'application/json',
@@ -139,20 +131,18 @@ async function apiCall(endpoint, options = {}) {
     return res.json();
 }
 
-// --- لوحة التحكم ---
+// --- تحميل البيانات ---
 async function loadDashboard() {
     try {
         const data = await apiCall('/dashboard');
         document.getElementById('ticketsCount').textContent = data.openTickets || 0;
         document.getElementById('resolvedCount').textContent = data.resolvedToday || 0;
         document.getElementById('avgTime').textContent = data.avgResponseTime || '~2s';
-        console.log('📊 Dashboard loaded:', data);
     } catch (e) {
         console.error('❌ Dashboard error:', e);
     }
 }
 
-// --- التذاكر ---
 async function loadTickets() {
     try {
         const data = await apiCall('/tickets');
@@ -173,7 +163,6 @@ async function loadTickets() {
                     </div>
                 </div>
             `).join('');
-            console.log('📋 Tickets loaded:', data.tickets.length);
         } else {
             container.innerHTML = '<span style="color:#666;">لا توجد تذاكر.</span>';
         }
@@ -190,7 +179,8 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
-async function resolveTicket(id) {
+// --- دوال التذاكر ---
+window.resolveTicket = async function(id) {
     if (!confirm('هل أنت متأكد من حل هذه التذكرة؟')) return;
     try {
         await apiCall(`/tickets/${id}/resolve`, { method: 'PUT' });
@@ -199,9 +189,9 @@ async function resolveTicket(id) {
     } catch (e) {
         alert('❌ فشل حل التذكرة: ' + e.message);
     }
-}
+};
 
-async function deleteTicket(id) {
+window.deleteTicket = async function(id) {
     if (!confirm('هل أنت متأكد من حذف هذه التذكرة؟')) return;
     try {
         await apiCall(`/tickets/${id}`, { method: 'DELETE' });
@@ -210,7 +200,7 @@ async function deleteTicket(id) {
     } catch (e) {
         alert('❌ فشل الحذف: ' + e.message);
     }
-}
+};
 
 // --- إنشاء تذكرة ---
 document.getElementById('submitTicketBtn').addEventListener('click', async () => {
@@ -234,7 +224,7 @@ document.getElementById('submitTicketBtn').addEventListener('click', async () =>
     status.className = '';
 
     try {
-        const res = await apiCall('/tickets', {
+        await apiCall('/tickets', {
             method: 'POST',
             body: JSON.stringify({ subject, description }),
         });
@@ -309,7 +299,7 @@ document.getElementById('chatInputField').addEventListener('keydown', (e) => {
     if (e.key === 'Enter') document.getElementById('chatSendBtn').click();
 });
 
-// --- الأحداث الرئيسية ---
+// --- تهيئة الصفحة ---
 document.addEventListener('DOMContentLoaded', () => {
     console.log('✅ DOM loaded');
     loginBtn.addEventListener('click', login);
@@ -320,7 +310,3 @@ document.addEventListener('DOMContentLoaded', () => {
         loadTickets();
     }
 });
-
-// جعل الدوال عامة للاستخدام في onclick
-window.resolveTicket = resolveTicket;
-window.deleteTicket = deleteTicket;
