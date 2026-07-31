@@ -43,18 +43,13 @@ function updateUI() {
     sections.forEach(el => {
         if (el) el.style.display = isLoggedIn ? 'block' : 'none';
     });
-
-    // إذا كان مسجلاً دخول، نعرض الترحيب في الشات
-    if (isLoggedIn) {
-        showSystemMessage('مرحباً! كيف يمكنني مساعدتك اليوم؟');
-    }
 }
 
 // --- مساعد لعرض رسائل النظام في الشات ---
-function showSystemMessage(text) {
+function showSystemMessage(text, isError = false) {
     if (!chatMessages) return;
     const msg = document.createElement('div');
-    msg.className = 'message assistant';
+    msg.className = `message assistant ${isError ? 'error' : ''}`;
     msg.textContent = text;
     chatMessages.appendChild(msg);
     chatMessages.scrollTop = chatMessages.scrollHeight;
@@ -62,9 +57,7 @@ function showSystemMessage(text) {
 
 // --- تنظيف الشات ---
 function clearChat() {
-    if (chatMessages) {
-        chatMessages.innerHTML = '';
-    }
+    if (chatMessages) chatMessages.innerHTML = '';
 }
 
 // --- تسجيل الدخول ---
@@ -91,13 +84,12 @@ async function login() {
             currentUser = data.user;
             localStorage.setItem('token', token);
 
-            // تنظيف البيانات القديمة
             clearChat();
             updateUI();
 
-            // تحميل البيانات للمستخدم الجديد
             await loadDashboard();
             await loadTickets();
+            showSystemMessage('مرحباً! كيف يمكنني مساعدتك اليوم؟');
         } else {
             throw new Error('استجابة غير صالحة من الخادم');
         }
@@ -114,36 +106,64 @@ function logout() {
     localStorage.removeItem('token');
     clearChat();
     updateUI();
-    // إعادة تعيين عناصر التذاكر
     if (ticketsContainer) ticketsContainer.innerHTML = '<span style="color:#666;">يرجى تسجيل الدخول</span>';
     if (ticketStatus) ticketStatus.textContent = '';
+}
+
+// --- استدعاء API مع إعادة محاولة التوكن ---
+async function apiCall(endpoint, options = {}) {
+    if (!token) {
+        throw new Error('لا يوجد توكن، يرجى تسجيل الدخول');
+    }
+
+    const headers = {
+        'Content-Type': 'application/json',
+        ...(options.headers || {}),
+        'Authorization': `Bearer ${token}`
+    };
+
+    const res = await fetch(`${API}${endpoint}`, {
+        ...options,
+        headers,
+    });
+
+    if (res.status === 401) {
+        // التوكن غير صالح، نقوم بتسجيل الخروج
+        logout();
+        throw new Error('انتهت صلاحية الجلسة، يرجى تسجيل الدخول مجدداً');
+    }
+
+    if (!res.ok) {
+        const text = await res.text();
+        try {
+            const json = JSON.parse(text);
+            throw new Error(json.error || text);
+        } catch {
+            throw new Error(text);
+        }
+    }
+
+    return res.json();
 }
 
 // --- تحميل البيانات ---
 async function loadDashboard() {
     if (!token) return;
     try {
-        const res = await fetch(`${API}/dashboard`, {
-            headers: { 'Authorization': `Bearer ${token}` }
-        });
-        if (!res.ok) throw new Error(await res.text());
-        const data = await res.json();
+        const data = await apiCall('/dashboard');
         $('ticketsCount').textContent = data.openTickets || 0;
         $('resolvedCount').textContent = data.resolvedToday || 0;
         $('avgTime').textContent = data.avgResponseTime || '~2s';
     } catch (e) {
         console.warn('Dashboard load failed:', e);
+        if (e.message.includes('انتهت صلاحية الجلسة')) logout();
     }
 }
 
 async function loadTickets() {
     if (!token) return;
     try {
-        const res = await fetch(`${API}/tickets`, {
-            headers: { 'Authorization': `Bearer ${token}` }
-        });
-        if (!res.ok) throw new Error(await res.text());
-        const data = await res.json();
+        const data = await apiCall('/tickets');
         if (data.tickets?.length) {
             ticketsContainer.innerHTML = data.tickets.map(t => `
                 <div class="ticket-item">
@@ -163,6 +183,7 @@ async function loadTickets() {
         }
     } catch (e) {
         console.warn('Tickets load failed:', e);
+        if (e.message.includes('انتهت صلاحية الجلسة')) logout();
     }
 }
 
@@ -172,32 +193,28 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
-// --- دوال التذاكر (تعمل عبر onclick) ---
+// --- دوال التذاكر ---
 window.resolveTicket = async function(id) {
     if (!confirm('هل أنت متأكد من حل هذه التذكرة؟')) return;
     try {
-        await fetch(`${API}/tickets/${id}/resolve`, {
-            method: 'PUT',
-            headers: { 'Authorization': `Bearer ${token}` }
-        });
+        await apiCall(`/tickets/${id}/resolve`, { method: 'PUT' });
         loadTickets();
         loadDashboard();
     } catch (e) {
-        alert('❌ فشل حل التذكرة');
+        alert('❌ فشل حل التذكرة: ' + e.message);
+        if (e.message.includes('انتهت صلاحية الجلسة')) logout();
     }
 };
 
 window.deleteTicket = async function(id) {
     if (!confirm('هل أنت متأكد من حذف هذه التذكرة؟')) return;
     try {
-        await fetch(`${API}/tickets/${id}`, {
-            method: 'DELETE',
-            headers: { 'Authorization': `Bearer ${token}` }
-        });
+        await apiCall(`/tickets/${id}`, { method: 'DELETE' });
         loadTickets();
         loadDashboard();
     } catch (e) {
-        alert('❌ فشل الحذف');
+        alert('❌ فشل الحذف: ' + e.message);
+        if (e.message.includes('انتهت صلاحية الجلسة')) logout();
     }
 };
 
@@ -222,12 +239,8 @@ if (submitTicketBtn) {
         ticketStatus.className = '';
 
         try {
-            await fetch(`${API}/tickets`, {
+            await apiCall('/tickets', {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${token}`
-                },
                 body: JSON.stringify({ subject, description })
             });
             ticketStatus.className = 'success';
@@ -238,7 +251,8 @@ if (submitTicketBtn) {
             loadDashboard();
         } catch (e) {
             ticketStatus.className = 'error';
-            ticketStatus.textContent = '❌ فشل الإنشاء';
+            ticketStatus.textContent = '❌ فشل الإنشاء: ' + e.message;
+            if (e.message.includes('انتهت صلاحية الجلسة')) logout();
         } finally {
             submitTicketBtn.disabled = false;
         }
@@ -278,17 +292,11 @@ async function sendMessage() {
     chatMessages.scrollTop = chatMessages.scrollHeight;
 
     try {
-        const res = await fetch(`${API}/chat`, {
+        // استخدم الدالة apiCall الموحدة
+        const data = await apiCall('/chat', {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${token}`
-            },
             body: JSON.stringify({ message: msg })
         });
-
-        if (!res.ok) throw new Error(await res.text());
-        const data = await res.json();
 
         loading.remove();
         const assistantMsg = document.createElement('div');
@@ -297,11 +305,13 @@ async function sendMessage() {
         chatMessages.appendChild(assistantMsg);
         chatMessages.scrollTop = chatMessages.scrollHeight;
 
-        // تحديث لوحة التحكم (قد تتغير الإحصائيات)
         loadDashboard();
     } catch (e) {
         loading.textContent = '❌ خطأ: ' + e.message;
         loading.className = 'message assistant error';
+        if (e.message.includes('انتهت صلاحية الجلسة')) {
+            logout();
+        }
     } finally {
         chatSendBtn.disabled = false;
         chatMessages.scrollTop = chatMessages.scrollHeight;
@@ -315,12 +325,11 @@ document.addEventListener('DOMContentLoaded', () => {
     logoutBtn.addEventListener('click', logout);
 
     if (token) {
-        // نحاول جلب المستخدم (قد نحتاج إلى /me)
-        // لكننا سنفترض أن المستخدم موجود
         currentUser = { email: 'مستخدم' };
         updateUI();
         loadDashboard();
         loadTickets();
+        showSystemMessage('مرحباً! كيف يمكنني مساعدتك اليوم؟');
     } else {
         updateUI();
     }
