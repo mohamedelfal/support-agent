@@ -12,19 +12,19 @@
             <h1>🤖 وكيل الدعم الذكي</h1>
             <p>خدمة عملاء آلية بالكامل</p>
             <div id="auth">
-                <button id="loginBtn">🔑 دخول</button>
-                <button id="logoutBtn" style="display:none;">🚪 خروج</button>
+                <button id="loginBtn" type="button">🔑 دخول</button>
+                <button id="logoutBtn" type="button" style="display:none;">🚪 خروج</button>
             </div>
         </header>
 
         <main>
-            <!-- قسم الحالة (يظهر بدلاً من الأقسام عند تسجيل الدخول) -->
-            <div id="statusMessage" style="display:none; background:#16162a; padding:20px; border-radius:14px; margin-bottom:18px; border:1px solid #1e1e2e;">
-                <h2>✅ تم تسجيل الدخول بنجاح</h2>
-                <p id="userEmail"></p>
+            <!-- رسالة الحالة -->
+            <div id="statusMessage" style="display:none; background:#16162a; padding:20px; border-radius:14px; margin-bottom:18px; border:1px solid #00b894;">
+                <h2 style="color:#00b894;">✅ تم تسجيل الدخول بنجاح</h2>
+                <p id="userEmail" style="color:#888; margin-top:8px;"></p>
             </div>
 
-            <!-- لوحة التحكم -->
+            <!-- الأقسام -->
             <section id="dashboard" style="display:none;">
                 <h2>📊 لوحة التحكم</h2>
                 <div id="stats">
@@ -43,7 +43,6 @@
                 </div>
             </section>
 
-            <!-- إنشاء تذكرة -->
             <section id="new-ticket" style="display:none;">
                 <h2>✏️ تذكرة جديدة</h2>
                 <input type="text" id="ticketSubject" placeholder="عنوان التذكرة" maxlength="100" />
@@ -52,13 +51,11 @@
                 <div id="ticketStatus"></div>
             </section>
 
-            <!-- قائمة التذاكر -->
             <section id="tickets-list" style="display:none;">
                 <h2>📋 التذاكر</h2>
                 <div id="ticketsContainer"></div>
             </section>
 
-            <!-- محادثة الوكيل -->
             <section id="chat-section" style="display:none;">
                 <h2>💬 محادثة الوكيل</h2>
                 <div id="chatMessages"></div>
