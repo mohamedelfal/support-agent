@@ -19,14 +19,12 @@
       }
     ]
   },
-  "ai_gateway": {
+    "ai_gateway": {
     "binding": "AI_GATEWAY",
-    "gateway_id": "YOUR_AI_GATEWAY_ID"
+    "gateway_id": "default"
   },
-  "ai": {
-    "binding": "AI"
-  },
+  "ai": { "binding": "AI" },
   "vars": {
-    "AI_GATEWAY_ID": "YOUR_AI_GATEWAY_ID"
+    "AI_GATEWAY_ID": "default"
   }
 }
