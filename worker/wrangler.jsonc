@@ -19,10 +19,12 @@
       }
     ]
   },
-  "ai_gateway": {
-    "binding": "AI_GATEWAY",
-    "gateway_id": "default"
-  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_classes": ["RateLimiter"]
+    }
+  ],
   "ai": {
     "binding": "AI"
   },
