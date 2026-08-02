@@ -1,1 +1,71 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>🤖 وكيل الدعم الذكي</title>
+    <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+    <div id="app">
+        <header>
+            <h1>🤖 وكيل الدعم الذكي</h1>
+            <p>خدمة عملاء آلية بالكامل</p>
+        </header>
 
+        <main>
+            <section id="login-section">
+                <h2>🔑 تسجيل الدخول</h2>
+                <form id="loginForm">
+                    <div class="form-group">
+                        <label for="email">البريد الإلكتروني</label>
+                        <input type="email" id="email" placeholder="example@email.com" required />
+                    </div>
+                    <button type="submit" id="loginSubmit">دخول</button>
+                    <div id="loginMessage"></div>
+                </form>
+            </section>
+
+            <section id="dashboard-section" style="display:none;">
+                <div id="userInfo">
+                    <h2>👋 مرحباً بك</h2>
+                    <p id="userEmailDisplay"></p>
+                    <button id="logoutBtn">🚪 خروج</button>
+                </div>
+
+                <div id="dashboard-content">
+                    <h3>📊 لوحة التحكم</h3>
+                    <p>تم تسجيل الدخول بنجاح.</p>
+
+                    <div id="ticket-form">
+                        <h4>✏️ تذكرة جديدة</h4>
+                        <input type="text" id="ticketSubject" placeholder="عنوان التذكرة" />
+                        <textarea id="ticketDescription" placeholder="وصف المشكلة..."></textarea>
+                        <button id="submitTicketBtn">📨 إرسال</button>
+                        <div id="ticketStatus"></div>
+                    </div>
+
+                    <div id="tickets-list">
+                        <h4>📋 التذاكر</h4>
+                        <div id="ticketsContainer"></div>
+                    </div>
+
+                    <div id="chat-section">
+                        <h4>💬 محادثة الوكيل</h4>
+                        <div id="chatMessages"></div>
+                        <div id="chatInput">
+                            <input type="text" id="chatInputField" placeholder="اسأل الوكيل..." />
+                            <button id="chatSendBtn">📨 إرسال</button>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </main>
+
+        <footer>
+            <p>🚀 Cloudflare Zero-Cost | <a href="#">GitHub</a></p>
+        </footer>
+    </div>
+    <script src="app.js"></script>
+</body>
+</html>
