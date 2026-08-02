@@ -1,0 +1,92 @@
+{
+  "name": "support-agent",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "support-agent-db",
+      "database_id": "d3daf930-ea18-41cc-ac8a-5ba19166281c" //  
+    }
+  ],
+  "kv_namespaces": [
+    {
+      "binding": "CACHE_KV",
+      "id": "7ad7739ad018433f91f9435ca70fa6b2" //
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "REFRESH_FAMILY",
+        "class_name": "RefreshFamily"
+      },
+      {
+        "name": "CIRCUIT_BREAKER",
+        "class_name": "CircuitBreaker"
+      },
+      {
+        "name": "RATE_LIMITER",
+        "class_name": "RateLimiter"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["RefreshFamily", "CircuitBreaker", "RateLimiter"]
+    }
+  ],
+  "queues": {
+    "producers": [
+      {
+        "binding": "AUDIT_QUEUE",
+        "queue": "audit-queue"
+      }
+    ],
+    "consumers": [
+      {
+        "binding": "AUDIT_CONSUMER",
+        "queue": "audit-queue",
+        "max_batch_size": 100,
+        "max_batch_timeout": 5,
+        "max_retries": 3,
+        "dead_letter_queue": "audit-dlq"
+      }
+    ]
+  },
+  "ai_gateway": {
+    "binding": "AI_GATEWAY",
+    "gateway_id": "default"
+  },
+  "ai": {
+    "binding": "AI"
+  },
+  "vars": {
+    "ENVIRONMENT": "development",
+    "AUTH_MODE": "development",
+    "AI_GATEWAY_ID": "default",
+    "AUTO_CREATE_USERS": "true",
+    "LOG_LEVEL": "debug"
+  },
+  "env": {
+    "staging": {
+      "vars": {
+        "ENVIRONMENT": "staging",
+        "AUTH_MODE": "staging",
+        "AUTO_CREATE_USERS": "true",
+        "LOG_LEVEL": "info"
+      }
+    },
+    "production": {
+      "vars": {
+        "ENVIRONMENT": "production",
+        "AUTH_MODE": "production",
+        "AUTO_CREATE_USERS": "false",
+        "LOG_LEVEL": "warn"
+      }
+    }
+  },
+  "pages_build_output_dir": "./frontend"
+}
