@@ -7,7 +7,7 @@
     {
       "binding": "DB",
       "database_name": "support-agent-db",
-      "database_id": "d3daf930-ea18-41cc-ac8a-5ba19166281c" //  
+      "database_id": "d3daf930-ea18-41cc-ac8a-5ba19166281c" //  db id
     }
   ],
   "kv_namespaces": [
