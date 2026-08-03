@@ -1,3 +1,7 @@
+// ============================================================
+// دوال مساعدة
+// ============================================================
+
 import { generateULID, hmacSign } from './crypto';
 
 export function isValidEmail(email: string): boolean {
