@@ -1,7 +1,7 @@
 {
   "name": "support-agent",
   "main": "src/index.ts",
-  "compatibility_date": "2026-08-03",
+  "compatibility_date": "2026-08-01",
   "compatibility_flags": ["nodejs_compat"],
   "d1_databases": [
     {
@@ -38,24 +38,6 @@
       "new_sqlite_classes": ["RefreshFamily", "CircuitBreaker", "RateLimiter"]
     }
   ],
-  "queues": {
-    "producers": [
-      {
-        "name": "audit-queue",
-        "binding": "AUDIT_QUEUE"
-      }
-    ],
-    "consumers": [
-      {
-        "name": "audit-queue",
-        "binding": "AUDIT_CONSUMER",
-        "max_batch_size": 100,
-        "max_batch_timeout": 5,
-        "max_retries": 3,
-        "dead_letter_queue": "audit-dlq"
-      }
-    ]
-  },
   "vars": {
     "ENVIRONMENT": "development",
     "AUTH_MODE": "development",
