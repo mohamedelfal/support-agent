@@ -1,3 +1,6 @@
+// ============================================================
+// نقطة الدخول الرئيسية
+// ============================================================
 
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
@@ -18,8 +21,16 @@ import ticketsRoutes from './routes/tickets';
 import chatRoutes from './routes/chat';
 import healthRoutes from './routes/health';
 
+// --- استيراد وتصدير Durable Objects ---
+import { RefreshFamily } from './durable/refresh-family';
+import { CircuitBreaker } from './durable/circuit-breaker';
+import { RateLimiter } from './durable/rate-limiter';
+
+export { RefreshFamily, CircuitBreaker, RateLimiter };
+
 const app = new Hono<{ Bindings: Env }>();
 
+// --- Validate Environment ---
 app.use('*', async (c, next) => {
   const validation = validateEnvironment(c.env);
   if (!validation.valid) {
@@ -28,6 +39,7 @@ app.use('*', async (c, next) => {
   await next();
 });
 
+// --- Global Middleware ---
 app.use('*', correlationIdMiddleware);
 app.use('*', securityHeaders);
 app.use('*', requestValidationMiddleware);
@@ -39,9 +51,13 @@ app.use('*', cors({
   maxAge: 86400,
 }));
 
+// --- Health ---
 app.route('/health', healthRoutes);
+
+// --- Auth (public) ---
 app.route('/api/v1/auth', authRoutes);
 
+// --- Protected Routes ---
 app.use('/api/v1/*', rateLimitMiddleware);
 app.use('/api/v1/*', csrfMiddleware);
 app.use('/api/v1/*', idempotencyMiddleware);
