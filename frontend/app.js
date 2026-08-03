@@ -3,7 +3,7 @@
 // ============================================================
 
 // 
-const API = 'https://support-agent.mohamed-elfal.workers.dev/api/v1';
+const API = '/api/v1';
 
 let token = null;
 let currentUser = null;
