@@ -1,5 +1,10 @@
+// ============================================================
+// Token Service
+// ============================================================
+
 import { Env, TokenPayload } from '../types';
-import { generateULID, sign } from '../utils/crypto';
+import { generateULID } from '../utils/crypto';
+import { sign } from 'hono/jwt';
 
 export class TokenService {
   constructor(private env: Env) {}
