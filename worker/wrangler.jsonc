@@ -39,7 +39,7 @@
     }
   ],
   "assets": {
-    "directory": "./frontend",
+    "directory": "../frontend",
     "binding": "ASSETS"
   },
   "vars": {
