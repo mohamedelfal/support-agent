@@ -20,8 +20,8 @@ jobs:
       - name: Install dependencies
         run: cd worker && npm install
 
-      - name: Deploy to Cloudflare Pages
-        run: cd worker && npx wrangler pages deploy ../frontend --project-name=support-agent
+      - name: Deploy Worker
+        run: cd worker && npx wrangler deploy
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
