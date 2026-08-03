@@ -7,13 +7,13 @@
     {
       "binding": "DB",
       "database_name": "support-agent-db",
-      "database_id": "d3daf930-ea18-41cc-ac8a-5ba19166281c" //  db id
+      "database_id": "d3daf930-ea18-41cc-ac8a-5ba19166281c"
     }
   ],
   "kv_namespaces": [
     {
       "binding": "CACHE_KV",
-      "id": "7ad7739ad018433f91f9435ca70fa6b2" //
+      "id": "7ad7739ad018433f91f9435ca70fa6b2"
     }
   ],
   "durable_objects": {
@@ -41,27 +41,20 @@
   "queues": {
     "producers": [
       {
-        "binding": "AUDIT_QUEUE",
-        "queue": "audit-queue"
+        "name": "audit-queue",
+        "binding": "AUDIT_QUEUE"
       }
     ],
     "consumers": [
       {
+        "name": "audit-queue",
         "binding": "AUDIT_CONSUMER",
-        "queue": "audit-queue",
         "max_batch_size": 100,
         "max_batch_timeout": 5,
         "max_retries": 3,
         "dead_letter_queue": "audit-dlq"
       }
     ]
-  },
-  "ai_gateway": {
-    "binding": "AI_GATEWAY",
-    "gateway_id": "default"
-  },
-  "ai": {
-    "binding": "AI"
   },
   "vars": {
     "ENVIRONMENT": "development",
