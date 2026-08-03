@@ -1,0 +1,41 @@
+name: CI/CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: cd worker && npm install
+      - run: cd worker && npx tsc --noEmit
+      - run: cd worker && npx eslint .
+      - run: cd worker && npm test
+      - run: cd worker && npm run test:integration
+      - run: cd worker && npm audit --production
+      - run: cd worker && npm run build
+
+  deploy:
+    needs: validate
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push'
+    steps:
+      - uses: actions/checkout@v4
+      - run: cd worker && npm install
+      - name: Deploy Worker
+        run: cd worker && npx wrangler deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      - name: Run Migrations
+        run: cd worker && npx wrangler d1 execute support-agent-db --file=./database/schema.sql
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
