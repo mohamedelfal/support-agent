@@ -30,7 +30,7 @@ export { RefreshFamily, CircuitBreaker, RateLimiter };
 
 const app = new Hono<{ Bindings: Env }>();
 
-// --- CORS (للسماح للواجهة بالاتصال) ---
+// --- CORS ---
 app.use('*', cors({
   origin: '*',
   allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
@@ -67,7 +67,5 @@ app.use('/api/v1/*', authMiddleware);
 
 app.route('/api/v1/tickets', ticketsRoutes);
 app.route('/api/v1/chat', chatRoutes);
-
-// تم حذف serveStatic
 
 export default app;
