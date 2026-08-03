@@ -38,6 +38,10 @@
       "new_sqlite_classes": ["RefreshFamily", "CircuitBreaker", "RateLimiter"]
     }
   ],
+  "assets": {
+    "directory": "./frontend",
+    "binding": "ASSETS"
+  },
   "vars": {
     "ENVIRONMENT": "development",
     "AUTH_MODE": "development",
