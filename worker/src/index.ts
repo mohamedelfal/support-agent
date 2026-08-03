@@ -1,10 +1,9 @@
 // ============================================================
-// نقطة الدخول الرئيسية
+// نقطة الدخول الرئيسية (بدون serveStatic)
 // ============================================================
 
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
-import { serveStatic } from 'hono/cloudflare-workers';
 import { Env } from './types';
 import {
   correlationIdMiddleware,
@@ -69,16 +68,6 @@ app.use('/api/v1/*', authMiddleware);
 app.route('/api/v1/tickets', ticketsRoutes);
 app.route('/api/v1/chat', chatRoutes);
 
-// --- خدمة الملفات الثابتة (الواجهة الأمامية) ---
-app.get('/*', serveStatic({
-  root: '../frontend',
-  rewriteRequestPath: (path) => {
-    // إذا كان الطلب على `/index.html` أو `/`، نخدم `index.html`
-    if (path === '/' || path === '/index.html') {
-      return '/index.html';
-    }
-    return path;
-  },
-}));
+// تم حذف serveStatic
 
 export default app;
