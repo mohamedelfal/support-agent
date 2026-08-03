@@ -1,5 +1,10 @@
+// ============================================================
+// AI Service (مع Circuit Breaker, Cache, Retry with Jitter)
+// ============================================================
+
 import { Env } from '../types';
-import { logger, canonicalStringify } from '../utils/helpers';
+import { logger } from '../utils/logger';
+import { canonicalStringify } from '../utils/crypto';
 import { CacheService } from './cache.service';
 import { AIProvider, GroqProvider, WorkersAIProvider, OpenAIProvider } from '../providers/ai.provider';
 
