@@ -46,7 +46,7 @@
     "LOG_LEVEL": "debug"
   },
   "env": {
-    "staging": {
+    "preview": {
       "vars": {
         "ENVIRONMENT": "staging",
         "AUTH_MODE": "staging",
@@ -62,6 +62,5 @@
         "LOG_LEVEL": "warn"
       }
     }
-  },
-  "pages_build_output_dir": "./frontend"
+  }
 }
