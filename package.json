@@ -1,6 +1,6 @@
 {
   "name": "support-agent",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "private": true,
   "scripts": {
     "deploy": "wrangler deploy"
@@ -8,6 +8,6 @@
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20240800.0",
     "typescript": "^5.5.4",
-    "wrangler": "^3.70.0"
+    "wrangler": "^4.118.0"
   }
 }
