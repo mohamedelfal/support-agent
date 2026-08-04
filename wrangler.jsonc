@@ -5,12 +5,17 @@
   "compatibility_date": "2026-08-01",
   "compatibility_flags": ["nodejs_compat"],
   
-  // ربط نموذج الذكاء الاصطناعي المجاني
+  "migrations": [
+    {
+      "tag": "v1",
+      "deleted_classes": ["CircuitBreaker"]
+    }
+  ],
+
   "ai": {
     "binding": "AI"
   },
 
-  // ربط قاعدة البيانات الحالية بحسابك
   "d1_databases": [
     {
       "binding": "DB",
@@ -19,7 +24,6 @@
     }
   ],
 
-  // ربط الذاكرة السريعة للتخزين المؤقت
   "kv_namespaces": [
     {
       "binding": "CACHE_KV",
