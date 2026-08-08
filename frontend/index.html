@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="ar">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🤖 وكيل الدعم الذكي</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div id="app">
+        <header>
+            <h1>🤖 وكيل الدعم الذكي</h1>
+            <p>خدمة عملاء آلية بالكامل</p>
+        </header>
+        <main>
+            <!-- قسم تسجيل الدخول -->
+            <section id="login-section">
+                <h2>🔑 تسجيل الدخول</h2>
+                <form id="loginForm">
+                    <div class="form-group">
+                        <label for="email">البريد الإلكتروني</label>
+                        <input type="email" id="email" placeholder="example@email.com" required>
+                    </div>
+                    <button type="submit" id="loginSubmit">دخول</button>
+                    <div id="loginMessage"></div>
+                </form>
+            </section>
+            <!-- لوحة التحكم (تظهر بعد تسجيل الدخول) -->
+            <section id="dashboard-section" style="display:none;">
+                <div id="userInfo">
+                    <h2>👋 مرحباً بك</h2>
+                    <p id="userEmailDisplay"></p>
+                    <button id="logoutBtn">🚪 خروج</button>
+                </div>
+                <div id="dashboard-content">
+                    <h3>📊 لوحة التحكم</h3>
+                    <p>تم تسجيل الدخول بنجاح. هذه هي الصفحة الرئيسية.</p>
+                </div>
+            </section>
+        </main>
+        <footer>
+            <p>🚀 Cloudflare Zero-Cost | <a href="#">GitHub</a></p>
+        </footer>
+    </div>
+    <script src="app.js"></script>
+</body>
+</html>
