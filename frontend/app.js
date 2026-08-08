@@ -2,8 +2,8 @@
 // وكيل الذكاء الاصطناعي - الواجهة الأمامية
 // ============================================================
 
-// الرابط النسبي (لأن Pages و Worker سيخدمان من نفس النطاق)
-const API = '/api';
+// ⚠️ استخدم الرابط الكامل للـ Worker (بدون /api في النهاية)
+const API = 'https://support-agent.mohamed-elfal.workers.dev/api';
 
 // عناصر DOM
 const messages = document.getElementById('messages');
@@ -30,9 +30,17 @@ async function sendQuestion() {
             body: JSON.stringify({ question }),
         });
 
+        // التحقق من الاستجابة
         if (!response.ok) {
-            const error = await response.json();
-            throw new Error(error.error || 'خطأ في الخادم');
+            // محاولة قراءة الخطأ من JSON، وإلا قراءة النص
+            let errorText;
+            try {
+                const errorData = await response.json();
+                errorText = errorData.error || `خطأ ${response.status}`;
+            } catch {
+                errorText = await response.text() || `خطأ ${response.status}`;
+            }
+            throw new Error(errorText);
         }
 
         const data = await response.json();
