@@ -1,1 +1,8 @@
-
+{
+  "name": "simple-ai-agent",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-08",
+  "ai": {
+    "binding": "AI"
+  }
+}
