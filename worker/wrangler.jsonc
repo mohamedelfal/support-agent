@@ -1,5 +1,5 @@
 {
-  "name": "simple-ai-agent",
+  "name": "support-agent",
   "main": "src/index.ts",
   "compatibility_date": "2026-08-08",
   "ai": {
