@@ -1,5 +1,5 @@
 {
-  "name": "simple-ai-agent-worker",
+  "name": "support-agent-worker",
   "version": "1.0.0",
   "type": "module",
   "scripts": {
