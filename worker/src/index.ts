@@ -13,7 +13,7 @@ const app = new Hono<{ Bindings: Env }>();
 
 // --- CORS (للسماح لـ Pages بالاتصال) ---
 app.use('*', cors({
-    origin: ['https://simple-ai-agent.pages.dev', 'http://localhost:3000'],
+    origin: ['https://support-agent.pages.dev', 'http://localhost:3000'],
     allowMethods: ['GET', 'POST', 'OPTIONS'],
     allowHeaders: ['Content-Type'],
 }));
