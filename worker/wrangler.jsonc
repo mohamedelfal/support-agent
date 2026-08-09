@@ -4,5 +4,12 @@
   "compatibility_date": "2026-08-01",
   "ai": {
     "binding": "AI"
-  }
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "support-agent-db",
+      "database_id": "d3daf930-ea18-41cc-ac8a-5ba19166281c"
+    }
+  ]
 }
