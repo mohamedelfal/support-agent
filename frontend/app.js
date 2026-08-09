@@ -1,26 +1,25 @@
 // ============================================================
 // وكيل الذكاء الاصطناعي - الواجهة الأمامية
+// مع دعم عرض المحادثات السابقة
 // ============================================================
 
-// الرابط المتوقع للـ Worker بعد النشر
 const API = 'https://support-agent.mohamed-elfal.workers.dev/api';
 
 // عناصر DOM
 const messages = document.getElementById('messages');
 const questionInput = document.getElementById('questionInput');
 const sendBtn = document.getElementById('sendBtn');
+const historyList = document.getElementById('history-list');
 
 // --- إرسال السؤال ---
 async function sendQuestion() {
     const question = questionInput.value.trim();
     if (!question) return;
 
-    // عرض سؤال المستخدم
     appendMessage(question, 'user');
     questionInput.value = '';
     sendBtn.disabled = true;
 
-    // مؤشر التحميل
     const loadingMsg = appendMessage('⏳ جاري التفكير...', 'assistant', true);
 
     try {
@@ -45,6 +44,9 @@ async function sendQuestion() {
         loadingMsg.remove();
         appendMessage(data.answer || 'لم أستطع الإجابة.', 'assistant');
 
+        // تحديث قائمة المحادثات بعد الإجابة
+        loadHistory();
+
     } catch (error) {
         loadingMsg.remove();
         console.error('Fetch error:', error);
@@ -68,6 +70,34 @@ function appendMessage(text, role, isLoading = false) {
     return msg;
 }
 
+// --- جلب المحادثات السابقة ---
+async function loadHistory() {
+    try {
+        const response = await fetch(`${API}/conversations`);
+        if (!response.ok) {
+            throw new Error('فشل في جلب المحادثات');
+        }
+        const data = await response.json();
+        
+        if (!data.conversations || data.conversations.length === 0) {
+            historyList.innerHTML = '<p style="color:#666;text-align:center;">لا توجد محادثات سابقة.</p>';
+            return;
+        }
+
+        historyList.innerHTML = data.conversations.map(conv => `
+            <div class="history-item">
+                <div class="history-question">❓ ${conv.message}</div>
+                <div class="history-answer">💬 ${conv.response}</div>
+                <div class="history-time">🕐 ${new Date(conv.created_at).toLocaleString('ar-EG')}</div>
+            </div>
+        `).join('');
+
+    } catch (error) {
+        console.error('Load history error:', error);
+        historyList.innerHTML = '<p style="color:#f5576c;text-align:center;">❌ فشل في تحميل المحادثات</p>';
+    }
+}
+
 // --- الأحداث ---
 sendBtn.addEventListener('click', sendQuestion);
 questionInput.addEventListener('keydown', (e) => {
@@ -76,3 +106,6 @@ questionInput.addEventListener('keydown', (e) => {
 
 // --- رسالة ترحيب ---
 appendMessage('👋 مرحباً! اسألني أي شيء وسأجيبك بأفضل ما لدي.', 'assistant');
+
+// --- تحميل المحادثات عند بدء الصفحة ---
+loadHistory();
