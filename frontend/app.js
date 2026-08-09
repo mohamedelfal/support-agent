@@ -2,7 +2,7 @@
 // وكيل الذكاء الاصطناعي - الواجهة الأمامية
 // ============================================================
 
-// ⚠️ استخدم الرابط الكامل للـ Worker (بدون /api في النهاية)
+// الرابط المتوقع للـ Worker بعد النشر
 const API = 'https://support-agent.mohamed-elfal.workers.dev/api';
 
 // عناصر DOM
@@ -30,9 +30,7 @@ async function sendQuestion() {
             body: JSON.stringify({ question }),
         });
 
-        // التحقق من الاستجابة
         if (!response.ok) {
-            // محاولة قراءة الخطأ من JSON، وإلا قراءة النص
             let errorText;
             try {
                 const errorData = await response.json();
@@ -44,13 +42,12 @@ async function sendQuestion() {
         }
 
         const data = await response.json();
-        // إزالة مؤشر التحميل
         loadingMsg.remove();
-        // عرض الإجابة
-        appendMessage(data.answer || 'لم أستطع الإجابة على هذا السؤال.', 'assistant');
+        appendMessage(data.answer || 'لم أستطع الإجابة.', 'assistant');
 
     } catch (error) {
         loadingMsg.remove();
+        console.error('Fetch error:', error);
         appendMessage('❌ ' + error.message, 'assistant');
     } finally {
         sendBtn.disabled = false;
@@ -58,7 +55,7 @@ async function sendQuestion() {
     }
 }
 
-// --- إضافة رسالة إلى المحادثة ---
+// --- إضافة رسالة ---
 function appendMessage(text, role, isLoading = false) {
     const msg = document.createElement('div');
     msg.className = `message ${role}`;
