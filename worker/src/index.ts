@@ -1,6 +1,6 @@
 // ============================================================
-// وكيل الذكاء الاصطناعي - Worker API (نسخة متطورة)
-// النموذج: Qwen3-30B-A3B (دعم ممتاز للغة العربية)
+// وكيل الذكاء الاصطناعي - Worker API
+// مع دعم قاعدة البيانات D1 (حفظ واسترجاع المحادثات)
 // ============================================================
 
 import { Hono } from 'hono';
@@ -8,6 +8,7 @@ import { cors } from 'hono/cors';
 
 type Env = {
     AI: Ai;
+    DB: D1Database;
 };
 
 const app = new Hono<{ Bindings: Env }>();
@@ -32,7 +33,7 @@ app.get('/api/test', (c) => c.json({
     timestamp: new Date().toISOString()
 }));
 
-// --- استقبال السؤال وإرجاع الإجابة ---
+// --- استقبال السؤال وإرجاع الإجابة (مع حفظ في D1) ---
 app.post('/api/ask', async (c) => {
     try {
         const { question } = await c.req.json();
@@ -45,7 +46,9 @@ app.post('/api/ask', async (c) => {
             return c.json({ error: 'AI service not available' }, 503);
         }
 
-        // استخدام نموذج Qwen3-30B (أقوى وأدق)
+        const db = c.env.DB;
+
+        // استدعاء النموذج
         const response = await ai.run('@cf/qwen/qwen3-30b-a3b-fp8', {
             messages: [
                 { 
@@ -60,19 +63,41 @@ app.post('/api/ask', async (c) => {
                 },
                 { role: 'user', content: question }
             ],
-            temperature: 0.2,      // دقة عالية
-            max_tokens: 800,       // إجابات أطول وأكثر تفصيلاً
+            temperature: 0.2,
+            max_tokens: 800,
         });
 
-        return c.json({ 
-            answer: response.response || 'لم أستطع الإجابة على هذا السؤال.' 
-        });
+        const answer = response.response || 'لم أستطع الإجابة على هذا السؤال.';
+
+        // حفظ المحادثة في D1
+        await db.prepare(
+            `INSERT INTO conversations (id, message, response, created_at) VALUES (?, ?, ?, ?)`
+        ).bind(
+            crypto.randomUUID(),
+            question,
+            answer,
+            new Date().toISOString()
+        ).run();
+
+        return c.json({ answer });
 
     } catch (error) {
         console.error('AI Error:', error);
-        return c.json({ 
-            error: 'حدث خطأ أثناء معالجة الطلب' 
-        }, 500);
+        return c.json({ error: 'حدث خطأ أثناء معالجة الطلب' }, 500);
+    }
+});
+
+// --- جلب المحادثات السابقة ---
+app.get('/api/conversations', async (c) => {
+    try {
+        const db = c.env.DB;
+        const { results } = await db.prepare(
+            'SELECT id, message, response, created_at FROM conversations ORDER BY created_at DESC LIMIT 50'
+        ).all();
+        return c.json({ conversations: results });
+    } catch (error) {
+        console.error('Fetch conversations error:', error);
+        return c.json({ error: 'فشل في جلب المحادثات' }, 500);
     }
 });
 
