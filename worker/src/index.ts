@@ -40,7 +40,7 @@ app.post('/api/ask', async (c) => {
             return c.json({ error: 'AI service not available' }, 503);
         }
 
-        const response = await ai.run('@cf/meta/llama-3-8b-instruct', {
+        const response = await ai.run('@cf/mistral/mistral-7b-instruct-v0.1', {
             messages: [
                 { role: 'system', content: 'أنت مساعد ذكي ومفيد. أجب على الأسئلة بوضوح ودقة.' },
                 { role: 'user', content: question }
