@@ -6,20 +6,26 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 
 type Env = {
-    AI: Ai; // Workers AI binding
+    AI: Ai;
 };
 
 const app = new Hono<{ Bindings: Env }>();
 
-// --- CORS (للسماح لـ Pages بالاتصال) ---
+// --- CORS ---
 app.use('*', cors({
-    origin: ['https://support-agent-dxu.pages.dev', 'http://localhost:3000'],
+    origin: '*',
     allowMethods: ['GET', 'POST', 'OPTIONS'],
     allowHeaders: ['Content-Type'],
 }));
 
 // --- نقطة الصحة ---
 app.get('/health', (c) => c.json({ status: 'ok', service: 'AI Agent' }));
+
+// --- نقطة اختبار ---
+app.get('/api/test', (c) => c.json({ 
+    message: 'API is working!',
+    timestamp: new Date().toISOString()
+}));
 
 // --- استقبال السؤال وإرجاع الإجابة ---
 app.post('/api/ask', async (c) => {
@@ -29,8 +35,11 @@ app.post('/api/ask', async (c) => {
             return c.json({ error: 'السؤال مطلوب' }, 400);
         }
 
-        // استدعاء Workers AI
         const ai = c.env.AI;
+        if (!ai) {
+            return c.json({ error: 'AI service not available' }, 503);
+        }
+
         const response = await ai.run('@cf/meta/llama-3-8b-instruct', {
             messages: [
                 { role: 'system', content: 'أنت مساعد ذكي ومفيد. أجب على الأسئلة بوضوح ودقة.' },
@@ -40,7 +49,9 @@ app.post('/api/ask', async (c) => {
             max_tokens: 500,
         });
 
-        return c.json({ answer: response.response });
+        return c.json({ 
+            answer: response.response || 'لم أستطع الإجابة.' 
+        });
 
     } catch (error) {
         console.error('AI Error:', error);
