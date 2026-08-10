@@ -43,6 +43,7 @@ app.post('/api/auth/login', async (c) => {
 
         return c.json({ success: true, token, user: { id: user.id, email: user.email } });
     } catch (e) {
+        console.error('Login error:', e);
         return c.json({ error: 'Login failed' }, 500);
     }
 });
@@ -67,7 +68,7 @@ app.get('/api/auth/me', async (c) => {
     }
 });
 
-// --- السؤال والإجابة ---
+// --- السؤال والإجابة (مع تصحيح user_id) ---
 app.post('/api/ask', async (c) => {
     try {
         const auth = c.req.header('Authorization');
@@ -76,13 +77,19 @@ app.post('/api/ask', async (c) => {
         const token = auth.replace('Bearer ', '');
         const payload = await verify(token, c.env.JWT_SECRET);
 
+        // 🔥 التصحيح: استخدم payload.sub مباشرةً (لا حاجة لاستعلام إضافي)
+        const userId = payload.sub;
+
+        // تحقق من وجود المستخدم في قاعدة البيانات (للتأكد)
         const db = c.env.DB;
-        const user = await db.prepare('SELECT id FROM users WHERE email = ?')
-            .bind(payload.email).first();
+        const user = await db.prepare('SELECT id FROM users WHERE id = ?')
+            .bind(userId).first();
 
-        if (!user) return c.json({ error: 'User not found' }, 404);
+        if (!user) {
+            console.error('User not found in DB:', userId);
+            return c.json({ error: 'User not found in database' }, 404);
+        }
 
-        const userId = user.id;
         const { question } = await c.req.json();
         if (!question) return c.json({ error: 'Question required' }, 400);
 
@@ -100,18 +107,30 @@ app.post('/api/ask', async (c) => {
 
         const answer = response.response || 'لم أستطع الإجابة.';
 
+        // 🔥 تأكد من أن userId ليس null أو undefined
+        if (!userId) {
+            console.error('userId is null or undefined');
+            return c.json({ error: 'Invalid user ID' }, 400);
+        }
+
         await db.prepare(
             `INSERT INTO conversations (id, user_id, message, response, created_at) VALUES (?, ?, ?, ?, ?)`
-        ).bind(crypto.randomUUID(), userId, question, answer, new Date().toISOString()).run();
+        ).bind(
+            crypto.randomUUID(),
+            userId,
+            question,
+            answer,
+            new Date().toISOString()
+        ).run();
 
         return c.json({ answer });
     } catch (e) {
-        console.error('Error:', e);
+        console.error('Error in /api/ask:', e);
         return c.json({ error: 'Internal error' }, 500);
     }
 });
 
-// --- جلب المحادثات ---
+// --- جلب المحادثات (مع تصحيح user_id) ---
 app.get('/api/conversations', async (c) => {
     try {
         const auth = c.req.header('Authorization');
@@ -120,19 +139,25 @@ app.get('/api/conversations', async (c) => {
         const token = auth.replace('Bearer ', '');
         const payload = await verify(token, c.env.JWT_SECRET);
 
+        // 🔥 استخدم payload.sub مباشرةً
+        const userId = payload.sub;
+
         const db = c.env.DB;
-        const user = await db.prepare('SELECT id FROM users WHERE email = ?')
-            .bind(payload.email).first();
+        const user = await db.prepare('SELECT id FROM users WHERE id = ?')
+            .bind(userId).first();
 
-        if (!user) return c.json({ error: 'User not found' }, 404);
+        if (!user) {
+            console.error('User not found in DB:', userId);
+            return c.json({ error: 'User not found' }, 404);
+        }
 
-        const userId = user.id;
         const { results } = await db.prepare(
             'SELECT id, message, response, created_at FROM conversations WHERE user_id = ? ORDER BY created_at DESC LIMIT 50'
         ).bind(userId).all();
 
         return c.json({ conversations: results });
     } catch (e) {
+        console.error('Error in /api/conversations:', e);
         return c.json({ error: 'Failed to fetch conversations' }, 500);
     }
 });
