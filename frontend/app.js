@@ -1,15 +1,125 @@
 // ============================================================
 // وكيل الذكاء الاصطناعي - الواجهة الأمامية
-// مع دعم عرض المحادثات السابقة
+// مع مصادقة البريد الإلكتروني وعزل المحادثات
 // ============================================================
 
 const API = 'https://support-agent.mohamed-elfal.workers.dev/api';
 
 // عناصر DOM
+const loginSection = document.getElementById('login-section');
+const chatSection = document.getElementById('chat-section');
+const historySection = document.getElementById('history-section');
+const loginForm = document.getElementById('loginForm');
+const emailInput = document.getElementById('email');
+const loginSubmit = document.getElementById('loginSubmit');
+const loginMessage = document.getElementById('loginMessage');
+const userEmailDisplay = document.getElementById('userEmailDisplay');
+const logoutBtn = document.getElementById('logoutBtn');
 const messages = document.getElementById('messages');
 const questionInput = document.getElementById('questionInput');
 const sendBtn = document.getElementById('sendBtn');
 const historyList = document.getElementById('history-list');
+
+let token = localStorage.getItem('token');
+let currentUser = null;
+
+// --- استدعاء API مع المصادقة ---
+async function apiCall(endpoint, options = {}) {
+    const headers = {
+        'Content-Type': 'application/json',
+        ...(options.headers || {})
+    };
+    if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const response = await fetch(`${API}${endpoint}`, {
+        ...options,
+        headers,
+    });
+
+    if (response.status === 401) {
+        logout();
+        throw new Error('جلسة غير صالحة، يرجى تسجيل الدخول مجدداً');
+    }
+
+    const data = await response.json();
+    if (!response.ok) {
+        throw new Error(data.error || `خطأ ${response.status}`);
+    }
+    return data;
+}
+
+// --- عرض رسالة ---
+function showMessage(element, text, type = '') {
+    element.textContent = text;
+    element.className = type;
+}
+
+// --- تسجيل الدخول ---
+async function login(email) {
+    loginSubmit.disabled = true;
+    loginSubmit.textContent = '⏳ جاري...';
+    showMessage(loginMessage, '');
+
+    try {
+        const data = await apiCall('/auth/login', {
+            method: 'POST',
+            body: JSON.stringify({ email })
+        });
+
+        token = data.token;
+        currentUser = data.user;
+        localStorage.setItem('token', token);
+        updateUI();
+        loadHistory();
+        showMessage(loginMessage, '✅ تم تسجيل الدخول بنجاح', 'success');
+
+    } catch (err) {
+        showMessage(loginMessage, '❌ ' + err.message, 'error');
+    } finally {
+        loginSubmit.disabled = false;
+        loginSubmit.textContent = 'دخول';
+    }
+}
+
+// --- تسجيل الخروج ---
+function logout() {
+    token = null;
+    currentUser = null;
+    localStorage.removeItem('token');
+    updateUI();
+    messages.innerHTML = '';
+    historyList.innerHTML = '';
+}
+
+// --- تحديث الواجهة ---
+function updateUI() {
+    const isLoggedIn = !!token && !!currentUser;
+    loginSection.style.display = isLoggedIn ? 'none' : 'block';
+    chatSection.style.display = isLoggedIn ? 'block' : 'none';
+    historySection.style.display = isLoggedIn ? 'block' : 'none';
+    if (isLoggedIn) {
+        userEmailDisplay.textContent = `👋 مرحباً ${currentUser.email}`;
+        // رسالة ترحيب في الشات
+        if (messages.children.length === 0) {
+            appendMessage('👋 مرحباً! اسألني أي شيء وسأجيبك بأفضل ما لدي.', 'assistant');
+        }
+    }
+}
+
+// --- التحقق من الجلسة ---
+async function checkSession() {
+    try {
+        const data = await apiCall('/auth/me');
+        currentUser = data.user;
+        updateUI();
+        loadHistory();
+    } catch (e) {
+        // غير مسجل دخول
+        console.log('Not logged in');
+    }
+}
 
 // --- إرسال السؤال ---
 async function sendQuestion() {
@@ -23,33 +133,17 @@ async function sendQuestion() {
     const loadingMsg = appendMessage('⏳ جاري التفكير...', 'assistant', true);
 
     try {
-        const response = await fetch(`${API}/ask`, {
+        const data = await apiCall('/ask', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ question }),
+            body: JSON.stringify({ question })
         });
 
-        if (!response.ok) {
-            let errorText;
-            try {
-                const errorData = await response.json();
-                errorText = errorData.error || `خطأ ${response.status}`;
-            } catch {
-                errorText = await response.text() || `خطأ ${response.status}`;
-            }
-            throw new Error(errorText);
-        }
-
-        const data = await response.json();
         loadingMsg.remove();
         appendMessage(data.answer || 'لم أستطع الإجابة.', 'assistant');
-
-        // تحديث قائمة المحادثات بعد الإجابة
         loadHistory();
 
     } catch (error) {
         loadingMsg.remove();
-        console.error('Fetch error:', error);
         appendMessage('❌ ' + error.message, 'assistant');
     } finally {
         sendBtn.disabled = false;
@@ -70,15 +164,11 @@ function appendMessage(text, role, isLoading = false) {
     return msg;
 }
 
-// --- جلب المحادثات السابقة ---
+// --- جلب المحادثات الخاصة ---
 async function loadHistory() {
+    if (!token) return;
     try {
-        const response = await fetch(`${API}/conversations`);
-        if (!response.ok) {
-            throw new Error('فشل في جلب المحادثات');
-        }
-        const data = await response.json();
-        
+        const data = await apiCall('/conversations');
         if (!data.conversations || data.conversations.length === 0) {
             historyList.innerHTML = '<p style="color:#666;text-align:center;">لا توجد محادثات سابقة.</p>';
             return;
@@ -99,13 +189,21 @@ async function loadHistory() {
 }
 
 // --- الأحداث ---
+loginForm.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const email = emailInput.value.trim();
+    if (!email) {
+        showMessage(loginMessage, '⚠️ يرجى إدخال البريد الإلكتروني', 'error');
+        return;
+    }
+    login(email);
+});
+
+logoutBtn.addEventListener('click', logout);
 sendBtn.addEventListener('click', sendQuestion);
 questionInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') sendQuestion();
 });
 
-// --- رسالة ترحيب ---
-appendMessage('👋 مرحباً! اسألني أي شيء وسأجيبك بأفضل ما لدي.', 'assistant');
-
-// --- تحميل المحادثات عند بدء الصفحة ---
-loadHistory();
+// --- بدء التطبيق ---
+checkSession();
