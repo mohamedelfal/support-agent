@@ -5,8 +5,10 @@ import { sign, verify } from 'hono/jwt';
 type Env = {
     AI: Ai;
     DB: D1Database;
-    JWT_SECRET: string;
 };
+
+// 🔥 JWT_SECRET مضبوط مباشرة في الكود (حل مؤقت)
+const JWT_SECRET = 's7f9k3l2p8q5r1t6u4w0x9z2n5m7b8c3';
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -38,7 +40,7 @@ app.post('/api/auth/login', async (c) => {
 
         const token = await sign(
             { sub: user.id, email: user.email, exp: Math.floor(Date.now() / 1000) + 60 * 60 * 24 * 7 },
-            c.env.JWT_SECRET
+            JWT_SECRET
         );
 
         return c.json({ success: true, token, user: { id: user.id, email: user.email } });
@@ -55,7 +57,7 @@ app.get('/api/auth/me', async (c) => {
         if (!auth) return c.json({ error: 'Unauthorized' }, 401);
 
         const token = auth.replace('Bearer ', '');
-        const payload = await verify(token, c.env.JWT_SECRET);
+        const payload = await verify(token, JWT_SECRET);
 
         const db = c.env.DB;
         const user = await db.prepare('SELECT id, email, created_at FROM users WHERE id = ?')
@@ -64,30 +66,32 @@ app.get('/api/auth/me', async (c) => {
         if (!user) return c.json({ error: 'User not found' }, 404);
         return c.json({ user });
     } catch (e) {
+        console.error('Me error:', e);
         return c.json({ error: 'Invalid token' }, 401);
     }
 });
 
-// --- السؤال والإجابة (مع تصحيح user_id) ---
+// --- السؤال والإجابة ---
 app.post('/api/ask', async (c) => {
     try {
         const auth = c.req.header('Authorization');
         if (!auth) return c.json({ error: 'Unauthorized' }, 401);
 
         const token = auth.replace('Bearer ', '');
-        const payload = await verify(token, c.env.JWT_SECRET);
+        const payload = await verify(token, JWT_SECRET);
 
-        // 🔥 التصحيح: استخدم payload.sub مباشرةً (لا حاجة لاستعلام إضافي)
         const userId = payload.sub;
+        if (!userId) {
+            return c.json({ error: 'Invalid user ID' }, 400);
+        }
 
-        // تحقق من وجود المستخدم في قاعدة البيانات (للتأكد)
         const db = c.env.DB;
         const user = await db.prepare('SELECT id FROM users WHERE id = ?')
             .bind(userId).first();
 
         if (!user) {
-            console.error('User not found in DB:', userId);
-            return c.json({ error: 'User not found in database' }, 404);
+            console.error('User not found:', userId);
+            return c.json({ error: 'User not found' }, 404);
         }
 
         const { question } = await c.req.json();
@@ -107,12 +111,6 @@ app.post('/api/ask', async (c) => {
 
         const answer = response.response || 'لم أستطع الإجابة.';
 
-        // 🔥 تأكد من أن userId ليس null أو undefined
-        if (!userId) {
-            console.error('userId is null or undefined');
-            return c.json({ error: 'Invalid user ID' }, 400);
-        }
-
         await db.prepare(
             `INSERT INTO conversations (id, user_id, message, response, created_at) VALUES (?, ?, ?, ?, ?)`
         ).bind(
@@ -125,29 +123,31 @@ app.post('/api/ask', async (c) => {
 
         return c.json({ answer });
     } catch (e) {
-        console.error('Error in /api/ask:', e);
+        console.error('Ask error:', e);
         return c.json({ error: 'Internal error' }, 500);
     }
 });
 
-// --- جلب المحادثات (مع تصحيح user_id) ---
+// --- جلب المحادثات ---
 app.get('/api/conversations', async (c) => {
     try {
         const auth = c.req.header('Authorization');
         if (!auth) return c.json({ error: 'Unauthorized' }, 401);
 
         const token = auth.replace('Bearer ', '');
-        const payload = await verify(token, c.env.JWT_SECRET);
+        const payload = await verify(token, JWT_SECRET);
 
-        // 🔥 استخدم payload.sub مباشرةً
         const userId = payload.sub;
+        if (!userId) {
+            return c.json({ error: 'Invalid user ID' }, 400);
+        }
 
         const db = c.env.DB;
         const user = await db.prepare('SELECT id FROM users WHERE id = ?')
             .bind(userId).first();
 
         if (!user) {
-            console.error('User not found in DB:', userId);
+            console.error('User not found:', userId);
             return c.json({ error: 'User not found' }, 404);
         }
 
@@ -157,7 +157,7 @@ app.get('/api/conversations', async (c) => {
 
         return c.json({ conversations: results });
     } catch (e) {
-        console.error('Error in /api/conversations:', e);
+        console.error('Conversations error:', e);
         return c.json({ error: 'Failed to fetch conversations' }, 500);
     }
 });
