@@ -174,7 +174,11 @@ app.post('/api/ask', async (c) => {
 
     } catch (error) {
         console.error('AI Error:', error);
-        return c.json({ error: 'حدث خطأ أثناء معالجة الطلب' }, 500);
+        // إرجاع خطأ تفصيلي للمساعدة في التصحيح
+        return c.json({ 
+            error: 'حدث خطأ أثناء معالجة الطلب',
+            details: (error as Error).message 
+        }, 500);
     }
 });
 
@@ -199,7 +203,11 @@ app.get('/api/conversations', async (c) => {
 
     } catch (error) {
         console.error('Fetch conversations error:', error);
-        return c.json({ error: 'فشل في جلب المحادثات' }, 500);
+        // إرجاع خطأ تفصيلي
+        return c.json({ 
+            error: 'فشل في جلب المحادثات',
+            details: (error as Error).message 
+        }, 500);
     }
 });
 
