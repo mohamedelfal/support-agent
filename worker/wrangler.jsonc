@@ -11,5 +11,8 @@
       "database_name": "support-agent-db",
       "database_id": "d3daf930-ea18-41cc-ac8a-5ba19166281c"
     }
-  ]
+  ],
+  "vars": {
+    "JWT_SECRET": "s7f9k3l2p8q5r1t6u4w0x9z2n5m7b8c3"
+  }
 }
