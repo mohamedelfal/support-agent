@@ -6,7 +6,7 @@ type Env = {
     AI: Ai;
     DB: D1Database;
     JWT_SECRET: string;
-    RATE_LIMIT_KV: KVNamespace; // 🔥 KV لتخزين محاولات الدخول
+    RATE_LIMIT_KV: KVNamespace;
 };
 
 const app = new Hono<{ Bindings: Env }>();
@@ -47,31 +47,25 @@ app.get('/health', (c) => c.json({
 // 🔐 المصادقة (مع Rate Limiting)
 // ============================================================
 
-// 🔥 دالة مساعدة للتحقق من معدل المحاولات
 async function checkRateLimit(env: Env, email: string): Promise<{ allowed: boolean; remaining?: number; retryAfter?: number }> {
     const kv = env.RATE_LIMIT_KV;
     const key = `login:${email}`;
     const now = Math.floor(Date.now() / 1000);
-    const windowSize = 15 * 60; // 15 دقيقة
-    const maxAttempts = 5; // 5 محاولات كحد أقصى
+    const windowSize = 15 * 60;
+    const maxAttempts = 5;
 
-    // جلب البيانات الحالية من KV
     let data = await kv.get(key, 'json') as { attempts: number; firstAttempt: number } | null;
     
     if (!data) {
-        // أول محاولة
         await kv.put(key, JSON.stringify({ attempts: 1, firstAttempt: now }), { expirationTtl: windowSize });
         return { allowed: true, remaining: maxAttempts - 1 };
     }
 
-    // التحقق من انتهاء النافذة الزمنية
     if (now - data.firstAttempt > windowSize) {
-        // إعادة تعيين النافذة
         await kv.put(key, JSON.stringify({ attempts: 1, firstAttempt: now }), { expirationTtl: windowSize });
         return { allowed: true, remaining: maxAttempts - 1 };
     }
 
-    // زيادة عدد المحاولات
     const newAttempts = data.attempts + 1;
     await kv.put(key, JSON.stringify({ attempts: newAttempts, firstAttempt: data.firstAttempt }), { expirationTtl: windowSize });
 
@@ -90,7 +84,6 @@ app.post('/api/auth/login', async (c) => {
         const { email } = await c.req.json();
         if (!email) return c.json({ error: 'Email required' }, 400);
 
-        // 🔥 التحقق من معدل المحاولات
         const rateLimit = await checkRateLimit(c.env, email);
         if (!rateLimit.allowed) {
             return c.json({ 
@@ -124,7 +117,29 @@ app.post('/api/auth/login', async (c) => {
     }
 });
 
-// ... (باقي نقاط النهاية كما هي)
+app.get('/api/auth/me', async (c) => {
+    try {
+        const auth = c.req.header('Authorization');
+        if (!auth) return c.json({ error: 'Unauthorized' }, 401);
+
+        const token = auth.replace('Bearer ', '');
+        const payload = await verify(token, c.env.JWT_SECRET, 'HS256');
+
+        if (!payload.sub) {
+            return c.json({ error: 'Invalid token payload' }, 401);
+        }
+
+        const db = c.env.DB;
+        const user = await db.prepare('SELECT id, email, created_at FROM users WHERE id = ?')
+            .bind(payload.sub).first();
+
+        if (!user) return c.json({ error: 'User not found' }, 404);
+        return c.json({ user });
+    } catch (e) {
+        console.error('Me error:', e);
+        return c.json({ error: 'Invalid token' }, 401);
+    }
+});
 
 // ============================================================
 // 🤖 الوكيل الذكي (مع حد أقصى لطول السؤال)
@@ -156,7 +171,6 @@ app.post('/api/ask', async (c) => {
         const { question } = await c.req.json();
         if (!question) return c.json({ error: 'Question required' }, 400);
 
-        // 🔥 حد أقصى لطول السؤال (1000 حرف) لتقليل استهلاك النموذج
         const MAX_QUESTION_LENGTH = 1000;
         if (question.length > MAX_QUESTION_LENGTH) {
             return c.json({ 
@@ -195,6 +209,42 @@ app.post('/api/ask', async (c) => {
     }
 });
 
-// ... (باقي نقاط النهاية كما هي)
+// ============================================================
+// 📜 جلب المحادثات السابقة
+// ============================================================
+
+app.get('/api/conversations', async (c) => {
+    try {
+        const auth = c.req.header('Authorization');
+        if (!auth) return c.json({ error: 'Unauthorized' }, 401);
+
+        const token = auth.replace('Bearer ', '');
+        const payload = await verify(token, c.env.JWT_SECRET, 'HS256');
+
+        if (!payload.sub) {
+            return c.json({ error: 'Invalid token payload' }, 401);
+        }
+
+        const userId = payload.sub;
+
+        const db = c.env.DB;
+        const user = await db.prepare('SELECT id FROM users WHERE id = ?')
+            .bind(userId).first();
+
+        if (!user) {
+            console.error('User not found:', userId);
+            return c.json({ error: 'User not found' }, 404);
+        }
+
+        const { results } = await db.prepare(
+            'SELECT id, message, response, created_at FROM conversations WHERE user_id = ? ORDER BY created_at DESC LIMIT 50'
+        ).bind(userId).all();
+
+        return c.json({ conversations: results });
+    } catch (e) {
+        console.error('Conversations error:', e);
+        return c.json({ error: 'Failed to fetch conversations' }, 500);
+    }
+});
 
 export default app;
