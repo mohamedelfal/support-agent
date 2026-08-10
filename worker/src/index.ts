@@ -1,6 +1,5 @@
 // ============================================================
-// وكيل الذكاء الاصطناعي - Worker API
-// مع مصادقة البريد الإلكتروني وربط المحادثات بالمستخدم
+// وكيل الذكاء الاصطناعي - Worker API (الإصدار النهائي المصحح)
 // ============================================================
 
 import { Hono } from 'hono';
@@ -39,7 +38,6 @@ app.get('/health', (c) => c.json({
 // المصادقة (Authentication)
 // ============================================================
 
-// --- تسجيل الدخول / إنشاء مستخدم ---
 app.post('/api/auth/login', async (c) => {
     try {
         const { email } = await c.req.json();
@@ -50,31 +48,23 @@ app.post('/api/auth/login', async (c) => {
         const db = c.env.DB;
         const cleanEmail = email.trim().toLowerCase();
 
-        // البحث عن المستخدم أو إنشاؤه
-        let user = await db.prepare(
-            'SELECT * FROM users WHERE email = ?'
-        ).bind(cleanEmail).first() as User | null;
+        let user = await db.prepare('SELECT * FROM users WHERE email = ?')
+            .bind(cleanEmail).first() as User | null;
 
         if (!user) {
             const id = crypto.randomUUID();
             const now = new Date().toISOString();
-            await db.prepare(
-                'INSERT INTO users (id, email, created_at) VALUES (?, ?, ?)'
-            ).bind(id, cleanEmail, now).run();
+            await db.prepare('INSERT INTO users (id, email, created_at) VALUES (?, ?, ?)')
+                .bind(id, cleanEmail, now).run();
             user = { id, email: cleanEmail, created_at: now };
         }
 
-        // إنشاء JWT
         const token = await sign(
             { sub: user.id, email: user.email, exp: Math.floor(Date.now() / 1000) + 60 * 60 * 24 * 7 },
             c.env.JWT_SECRET
         );
 
-        return c.json({
-            success: true,
-            token,
-            user: { id: user.id, email: user.email }
-        });
+        return c.json({ success: true, token, user: { id: user.id, email: user.email } });
 
     } catch (error) {
         console.error('Login error:', error);
@@ -82,26 +72,19 @@ app.post('/api/auth/login', async (c) => {
     }
 });
 
-// --- التحقق من الجلسة ---
 app.get('/api/auth/me', async (c) => {
     try {
         const auth = c.req.header('Authorization');
-        if (!auth) {
-            return c.json({ error: 'غير مصرح' }, 401);
-        }
+        if (!auth) return c.json({ error: 'غير مصرح' }, 401);
 
         const token = auth.replace('Bearer ', '');
         const payload = await verify(token, c.env.JWT_SECRET);
 
         const db = c.env.DB;
-        const user = await db.prepare(
-            'SELECT id, email, created_at FROM users WHERE id = ?'
-        ).bind(payload.sub).first();
+        const user = await db.prepare('SELECT id, email, created_at FROM users WHERE id = ?')
+            .bind(payload.sub).first();
 
-        if (!user) {
-            return c.json({ error: 'المستخدم غير موجود' }, 404);
-        }
-
+        if (!user) return c.json({ error: 'المستخدم غير موجود' }, 404);
         return c.json({ user });
 
     } catch (error) {
@@ -113,32 +96,32 @@ app.get('/api/auth/me', async (c) => {
 // الوكيل الذكي (مع ربط المحادثات بالمستخدم)
 // ============================================================
 
-// --- استقبال السؤال (مع المصادقة) ---
 app.post('/api/ask', async (c) => {
     try {
-        // التحقق من التوكن
         const auth = c.req.header('Authorization');
-        if (!auth) {
-            return c.json({ error: 'غير مصرح' }, 401);
-        }
+        if (!auth) return c.json({ error: 'غير مصرح' }, 401);
 
         const token = auth.replace('Bearer ', '');
         const payload = await verify(token, c.env.JWT_SECRET);
-        const userId = payload.sub;
+        
+        // 🔥 **التصحيح الجوهري**: استخدم البريد الإلكتروني للبحث عن المستخدم
+        const db = c.env.DB;
+        const email = payload.email;
+        const user = await db.prepare('SELECT id FROM users WHERE email = ?')
+            .bind(email).first();
+
+        if (!user) {
+            return c.json({ error: 'المستخدم غير موجود في قاعدة البيانات' }, 404);
+        }
+
+        const userId = user.id;
 
         const { question } = await c.req.json();
-        if (!question) {
-            return c.json({ error: 'السؤال مطلوب' }, 400);
-        }
+        if (!question) return c.json({ error: 'السؤال مطلوب' }, 400);
 
         const ai = c.env.AI;
-        if (!ai) {
-            return c.json({ error: 'AI service not available' }, 503);
-        }
+        if (!ai) return c.json({ error: 'AI service not available' }, 503);
 
-        const db = c.env.DB;
-
-        // استدعاء النموذج
         const response = await ai.run('@cf/qwen/qwen3-30b-a3b-fp8', {
             messages: [
                 { 
@@ -159,7 +142,6 @@ app.post('/api/ask', async (c) => {
 
         const answer = response.response || 'لم أستطع الإجابة على هذا السؤال.';
 
-        // حفظ المحادثة مع user_id
         await db.prepare(
             `INSERT INTO conversations (id, user_id, message, response, created_at) VALUES (?, ?, ?, ?, ?)`
         ).bind(
@@ -174,7 +156,6 @@ app.post('/api/ask', async (c) => {
 
     } catch (error) {
         console.error('AI Error:', error);
-        // إرجاع خطأ تفصيلي للمساعدة في التصحيح
         return c.json({ 
             error: 'حدث خطأ أثناء معالجة الطلب',
             details: (error as Error).message 
@@ -182,19 +163,25 @@ app.post('/api/ask', async (c) => {
     }
 });
 
-// --- جلب المحادثات الخاصة بالمستخدم ---
 app.get('/api/conversations', async (c) => {
     try {
         const auth = c.req.header('Authorization');
-        if (!auth) {
-            return c.json({ error: 'غير مصرح' }, 401);
-        }
+        if (!auth) return c.json({ error: 'غير مصرح' }, 401);
 
         const token = auth.replace('Bearer ', '');
         const payload = await verify(token, c.env.JWT_SECRET);
-        const userId = payload.sub;
-
+        
         const db = c.env.DB;
+        const email = payload.email;
+        const user = await db.prepare('SELECT id FROM users WHERE email = ?')
+            .bind(email).first();
+
+        if (!user) {
+            return c.json({ error: 'المستخدم غير موجود في قاعدة البيانات' }, 404);
+        }
+
+        const userId = user.id;
+
         const { results } = await db.prepare(
             'SELECT id, message, response, created_at FROM conversations WHERE user_id = ? ORDER BY created_at DESC LIMIT 50'
         ).bind(userId).all();
@@ -203,11 +190,7 @@ app.get('/api/conversations', async (c) => {
 
     } catch (error) {
         console.error('Fetch conversations error:', error);
-        // إرجاع خطأ تفصيلي
-        return c.json({ 
-            error: 'فشل في جلب المحادثات',
-            details: (error as Error).message 
-        }, 500);
+        return c.json({ error: 'فشل في جلب المحادثات' }, 500);
     }
 });
 
