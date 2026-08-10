@@ -43,7 +43,15 @@ async function apiCall(endpoint, options = {}) {
         throw new Error('جلسة غير صالحة، يرجى تسجيل الدخول مجدداً');
     }
 
-    const data = await response.json();
+    // محاولة قراءة الرد كـ JSON، وإلا اعتبارها نصاً
+    let data;
+    try {
+        data = await response.json();
+    } catch {
+        // إذا لم يكن JSON، نأخذ النص
+        data = { error: await response.text() };
+    }
+
     if (!response.ok) {
         throw new Error(data.error || `خطأ ${response.status}`);
     }
@@ -101,7 +109,6 @@ function updateUI() {
     historySection.style.display = isLoggedIn ? 'block' : 'none';
     if (isLoggedIn) {
         userEmailDisplay.textContent = `👋 مرحباً ${currentUser.email}`;
-        // رسالة ترحيب في الشات
         if (messages.children.length === 0) {
             appendMessage('👋 مرحباً! اسألني أي شيء وسأجيبك بأفضل ما لدي.', 'assistant');
         }
@@ -116,7 +123,6 @@ async function checkSession() {
         updateUI();
         loadHistory();
     } catch (e) {
-        // غير مسجل دخول
         console.log('Not logged in');
     }
 }
@@ -184,7 +190,7 @@ async function loadHistory() {
 
     } catch (error) {
         console.error('Load history error:', error);
-        historyList.innerHTML = '<p style="color:#f5576c;text-align:center;">❌ فشل في تحميل المحادثات</p>';
+        historyList.innerHTML = `<p style="color:#f5576c;text-align:center;">❌ فشل في تحميل المحادثات: ${error.message}</p>`;
     }
 }
 
