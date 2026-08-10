@@ -5,22 +5,47 @@ import { sign, verify } from 'hono/jwt';
 type Env = {
     AI: Ai;
     DB: D1Database;
+    JWT_SECRET: string; // 🔥 الآن يُقرأ من البيئة
 };
-
-// 🔥 JWT_SECRET (يجب أن يكون 32 حرفاً على الأقل)
-const JWT_SECRET = 's7f9k3l2p8q5r1t6u4w0x9z2n5m7b8c3';
 
 const app = new Hono<{ Bindings: Env }>();
 
+// ============================================================
+// 🔒 رؤوس الأمان (Security Headers)
+// ============================================================
+app.use('*', async (c, next) => {
+    await next();
+    c.res.headers.set('X-Content-Type-Options', 'nosniff');
+    c.res.headers.set('X-Frame-Options', 'DENY');
+    c.res.headers.set('Referrer-Policy', 'strict-origin-when-cross-origin');
+    c.res.headers.set('Content-Security-Policy', 
+        "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline';"
+    );
+});
+
+// ============================================================
+// 🔒 CORS (مقيد بالنطاقات المسموحة فقط)
+// ============================================================
 app.use('*', cors({
-    origin: '*',
+    origin: ['https://support-agent-dxu.pages.dev', 'http://localhost:3000'],
     allowMethods: ['GET', 'POST', 'OPTIONS'],
     allowHeaders: ['Content-Type', 'Authorization'],
+    credentials: true,
 }));
 
-app.get('/health', (c) => c.json({ status: 'ok', service: 'AI Agent' }));
+// ============================================================
+// نقطة الصحة
+// ============================================================
+app.get('/health', (c) => c.json({ 
+    status: 'ok', 
+    service: 'AI Agent (Secure)',
+    timestamp: new Date().toISOString()
+}));
 
-// --- تسجيل الدخول ---
+// ============================================================
+// 🔐 المصادقة (Authentication)
+// ============================================================
+
 app.post('/api/auth/login', async (c) => {
     try {
         const { email } = await c.req.json();
@@ -38,10 +63,10 @@ app.post('/api/auth/login', async (c) => {
             user = { id, email: cleanEmail, created_at: now };
         }
 
-        // 🔥 توقيع JWT مع alg: 'HS256'
+        // 🔥 استخدام JWT_SECRET من البيئة
         const token = await sign(
             { sub: user.id, email: user.email, exp: Math.floor(Date.now() / 1000) + 60 * 60 * 24 * 7 },
-            JWT_SECRET,
+            c.env.JWT_SECRET,
             'HS256'
         );
 
@@ -52,18 +77,15 @@ app.post('/api/auth/login', async (c) => {
     }
 });
 
-// --- التحقق من الجلسة ---
 app.get('/api/auth/me', async (c) => {
     try {
         const auth = c.req.header('Authorization');
         if (!auth) return c.json({ error: 'Unauthorized' }, 401);
 
         const token = auth.replace('Bearer ', '');
-        // 🔥 التحقق مع alg: 'HS256'
-        const payload = await verify(token, JWT_SECRET, 'HS256');
+        const payload = await verify(token, c.env.JWT_SECRET, 'HS256');
 
         if (!payload.sub) {
-            console.error('Payload missing sub:', payload);
             return c.json({ error: 'Invalid token payload' }, 401);
         }
 
@@ -79,18 +101,19 @@ app.get('/api/auth/me', async (c) => {
     }
 });
 
-// --- السؤال والإجابة ---
+// ============================================================
+// 🤖 الوكيل الذكي
+// ============================================================
+
 app.post('/api/ask', async (c) => {
     try {
         const auth = c.req.header('Authorization');
         if (!auth) return c.json({ error: 'Unauthorized' }, 401);
 
         const token = auth.replace('Bearer ', '');
-        // 🔥 التحقق مع alg: 'HS256'
-        const payload = await verify(token, JWT_SECRET, 'HS256');
+        const payload = await verify(token, c.env.JWT_SECRET, 'HS256');
 
         if (!payload.sub) {
-            console.error('Payload missing sub:', payload);
             return c.json({ error: 'Invalid token payload' }, 401);
         }
 
@@ -101,7 +124,7 @@ app.post('/api/ask', async (c) => {
             .bind(userId).first();
 
         if (!user) {
-            console.error('User not found in DB:', userId);
+            console.error('User not found:', userId);
             return c.json({ error: 'User not found' }, 404);
         }
 
@@ -139,18 +162,15 @@ app.post('/api/ask', async (c) => {
     }
 });
 
-// --- جلب المحادثات ---
 app.get('/api/conversations', async (c) => {
     try {
         const auth = c.req.header('Authorization');
         if (!auth) return c.json({ error: 'Unauthorized' }, 401);
 
         const token = auth.replace('Bearer ', '');
-        // 🔥 التحقق مع alg: 'HS256'
-        const payload = await verify(token, JWT_SECRET, 'HS256');
+        const payload = await verify(token, c.env.JWT_SECRET, 'HS256');
 
         if (!payload.sub) {
-            console.error('Payload missing sub:', payload);
             return c.json({ error: 'Invalid token payload' }, 401);
         }
 
