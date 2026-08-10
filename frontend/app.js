@@ -22,6 +22,22 @@ const historyList = document.getElementById('history-list');
 let token = localStorage.getItem('token');
 let currentUser = null;
 
+// --- عرض رسالة مؤقتة (مع ضمان الرؤية) ---
+function showMessage(element, text, type = '') {
+    // التأكد من أن العنصر موجود ومرئي
+    if (!element) return;
+    element.textContent = text;
+    element.className = type;
+    element.style.display = 'block'; // تأكد من ظهوره
+    // إخفاء الرسالة بعد 5 ثوانٍ
+    clearTimeout(element._timeout);
+    element._timeout = setTimeout(() => {
+        element.textContent = '';
+        element.className = '';
+        element.style.display = 'none';
+    }, 5000);
+}
+
 // --- استدعاء API ---
 async function apiCall(endpoint, options = {}) {
     const headers = {
@@ -56,24 +72,12 @@ async function apiCall(endpoint, options = {}) {
     return data;
 }
 
-// --- عرض رسالة مؤقتة ---
-function showMessage(element, text, type = '') {
-    element.textContent = text;
-    element.className = type;
-    // إخفاء الرسالة بعد 5 ثوانٍ
-    setTimeout(() => {
-        if (element.textContent === text) {
-            element.textContent = '';
-            element.className = '';
-        }
-    }, 5000);
-}
-
 // --- تسجيل الدخول ---
 async function login(email) {
     loginSubmit.disabled = true;
     loginSubmit.textContent = '⏳ جاري...';
-    showMessage(loginMessage, '');
+    // عرض رسالة "جاري..." في loginMessage
+    showMessage(loginMessage, '⏳ جاري تسجيل الدخول...', '');
 
     try {
         const data = await apiCall('/auth/login', {
@@ -84,9 +88,15 @@ async function login(email) {
         token = data.token;
         currentUser = data.user;
         localStorage.setItem('token', token);
-        updateUI();
-        loadHistory();
+        
+        // عرض رسالة النجاح قبل تحديث الواجهة
         showMessage(loginMessage, '✅ تم تسجيل الدخول بنجاح', 'success');
+        
+        // تحديث الواجهة بعد الرسالة (مع تأخير بسيط)
+        setTimeout(() => {
+            updateUI();
+            loadHistory();
+        }, 300);
 
     } catch (err) {
         showMessage(loginMessage, '❌ ' + err.message, 'error');
@@ -104,7 +114,7 @@ function logout() {
     updateUI();
     messages.innerHTML = '';
     historyList.innerHTML = '';
-    // عرض رسالة الخروج
+    // عرض رسالة الخروج (باستخدام loginMessage)
     showMessage(loginMessage, '👋 تم تسجيل الخروج', 'success');
 }
 
