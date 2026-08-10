@@ -7,7 +7,7 @@ type Env = {
     DB: D1Database;
 };
 
-// 🔥 JWT_SECRET مضبوط مباشرة في الكود (للتجاوز)
+// 🔥 JWT_SECRET (يجب أن يكون 32 حرفاً على الأقل)
 const JWT_SECRET = 's7f9k3l2p8q5r1t6u4w0x9z2n5m7b8c3';
 
 const app = new Hono<{ Bindings: Env }>();
@@ -38,9 +38,11 @@ app.post('/api/auth/login', async (c) => {
             user = { id, email: cleanEmail, created_at: now };
         }
 
+        // 🔥 توقيع JWT مع alg: 'HS256'
         const token = await sign(
             { sub: user.id, email: user.email, exp: Math.floor(Date.now() / 1000) + 60 * 60 * 24 * 7 },
-            JWT_SECRET
+            JWT_SECRET,
+            'HS256'
         );
 
         return c.json({ success: true, token, user: { id: user.id, email: user.email } });
@@ -57,7 +59,8 @@ app.get('/api/auth/me', async (c) => {
         if (!auth) return c.json({ error: 'Unauthorized' }, 401);
 
         const token = auth.replace('Bearer ', '');
-        const payload = await verify(token, JWT_SECRET);
+        // 🔥 التحقق مع alg: 'HS256'
+        const payload = await verify(token, JWT_SECRET, 'HS256');
 
         if (!payload.sub) {
             console.error('Payload missing sub:', payload);
@@ -83,7 +86,8 @@ app.post('/api/ask', async (c) => {
         if (!auth) return c.json({ error: 'Unauthorized' }, 401);
 
         const token = auth.replace('Bearer ', '');
-        const payload = await verify(token, JWT_SECRET);
+        // 🔥 التحقق مع alg: 'HS256'
+        const payload = await verify(token, JWT_SECRET, 'HS256');
 
         if (!payload.sub) {
             console.error('Payload missing sub:', payload);
@@ -118,7 +122,7 @@ app.post('/api/ask', async (c) => {
 
         const answer = response.response || 'لم أستطع الإجابة.';
 
-        const result = await db.prepare(
+        await db.prepare(
             `INSERT INTO conversations (id, user_id, message, response, created_at) VALUES (?, ?, ?, ?, ?)`
         ).bind(
             crypto.randomUUID(),
@@ -127,8 +131,6 @@ app.post('/api/ask', async (c) => {
             answer,
             new Date().toISOString()
         ).run();
-
-        console.log('Insert result:', result);
 
         return c.json({ answer });
     } catch (e) {
@@ -144,7 +146,8 @@ app.get('/api/conversations', async (c) => {
         if (!auth) return c.json({ error: 'Unauthorized' }, 401);
 
         const token = auth.replace('Bearer ', '');
-        const payload = await verify(token, JWT_SECRET);
+        // 🔥 التحقق مع alg: 'HS256'
+        const payload = await verify(token, JWT_SECRET, 'HS256');
 
         if (!payload.sub) {
             console.error('Payload missing sub:', payload);
