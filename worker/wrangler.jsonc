@@ -11,5 +11,11 @@
       "database_name": "support-agent-db",
       "database_id": "d3daf930-ea18-41cc-ac8a-5ba19166281c"
     }
+  ],
+  "kv_namespaces": [
+    {
+      "binding": "RATE_LIMIT_KV",
+      "id": "173790c006424908b249f16568b4210d" // 
+    }
   ]
 }
