@@ -42,6 +42,66 @@ section h2 {
     font-size: 18px;
     margin-bottom: 15px;
 }
+.form-group {
+    margin-bottom: 15px;
+}
+.form-group label {
+    display: block;
+    margin-bottom: 6px;
+    color: #aaa;
+    font-size: 14px;
+}
+.form-group input {
+    width: 100%;
+    padding: 12px 16px;
+    border-radius: 10px;
+    border: none;
+    background: #1e1e2e;
+    color: #fff;
+    outline: 2px solid #2a2a3e;
+    font-size: 16px;
+}
+.form-group input:focus {
+    outline-color: #6c5ce7;
+}
+button {
+    width: 100%;
+    padding: 12px;
+    border: none;
+    border-radius: 10px;
+    background: linear-gradient(135deg, #6c5ce7, #00b894);
+    color: #fff;
+    font-weight: 600;
+    font-size: 16px;
+    cursor: pointer;
+}
+button:hover { opacity: 0.85; }
+button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+#loginMessage {
+    margin-top: 15px;
+    font-size: 14px;
+    text-align: center;
+}
+#loginMessage.error { color: #f5576c; }
+#loginMessage.success { color: #00b894; }
+
+#user-info {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding-bottom: 12px;
+    border-bottom: 1px solid #1e1e2e;
+    margin-bottom: 15px;
+}
+#user-info span { color: #888; }
+#user-info button {
+    width: auto;
+    padding: 6px 18px;
+    font-size: 14px;
+    background: #f5576c;
+}
+
 #messages {
     min-height: 200px;
     max-height: 400px;
@@ -83,24 +143,11 @@ section h2 {
     outline: 2px solid #2a2a3e;
     font-size: 16px;
 }
-#input-area input:focus {
-    outline-color: #6c5ce7;
-}
+#input-area input:focus { outline-color: #6c5ce7; }
 #input-area button {
+    width: auto;
     padding: 12px 24px;
-    border: none;
-    border-radius: 10px;
     background: linear-gradient(135deg, #6c5ce7, #00b894);
-    color: #fff;
-    font-weight: 600;
-    cursor: pointer;
-}
-#input-area button:hover {
-    opacity: 0.85;
-}
-#input-area button:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
 }
 footer {
     text-align: center;
@@ -110,17 +157,9 @@ footer {
     border-top: 1px solid #1a1a2e;
     margin-top: 20px;
 }
-footer a {
-    color: #6c5ce7;
-    text-decoration: none;
-}
-.loading {
-    color: #666;
-    text-align: center;
-    padding: 10px;
-}
+footer a { color: #6c5ce7; text-decoration: none; }
+.loading { color: #666; text-align: center; padding: 10px; }
 
-/* --- تنسيق المحادثات السابقة --- */
 #history-list {
     max-height: 400px;
     overflow-y: auto;
@@ -132,16 +171,6 @@ footer a {
     margin-bottom: 10px;
     border-right: 3px solid #6c5ce7;
 }
-.history-question {
-    color: #6c5ce7;
-    font-weight: 600;
-    margin-bottom: 4px;
-}
-.history-answer {
-    color: #e0e0e0;
-    margin-bottom: 4px;
-}
-.history-time {
-    color: #666;
-    font-size: 12px;
-}
+.history-question { color: #6c5ce7; font-weight: 600; margin-bottom: 4px; }
+.history-answer { color: #e0e0e0; margin-bottom: 4px; }
+.history-time { color: #666; font-size: 12px; }
