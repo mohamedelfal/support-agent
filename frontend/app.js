@@ -43,13 +43,14 @@ async function apiCall(endpoint, options = {}) {
         throw new Error('جلسة غير صالحة، يرجى تسجيل الدخول مجدداً');
     }
 
-    // محاولة قراءة الرد كـ JSON، وإلا اعتبارها نصاً
+    // 🔥 الحل: قراءة النص أولاً ثم محاولة تحويله إلى JSON
+    const text = await response.text();
     let data;
     try {
-        data = await response.json();
+        data = JSON.parse(text);
     } catch {
-        // إذا لم يكن JSON، نأخذ النص
-        data = { error: await response.text() };
+        // إذا لم يكن JSON صالحاً، نعتبره خطأ
+        throw new Error(text || `خطأ ${response.status}`);
     }
 
     if (!response.ok) {
