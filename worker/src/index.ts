@@ -7,7 +7,7 @@ type Env = {
     DB: D1Database;
 };
 
-// 🔥 JWT_SECRET مضبوط مباشرة في الكود (حل مؤقت)
+// 🔥 JWT_SECRET مضبوط مباشرة في الكود (للتجاوز)
 const JWT_SECRET = 's7f9k3l2p8q5r1t6u4w0x9z2n5m7b8c3';
 
 const app = new Hono<{ Bindings: Env }>();
@@ -59,6 +59,11 @@ app.get('/api/auth/me', async (c) => {
         const token = auth.replace('Bearer ', '');
         const payload = await verify(token, JWT_SECRET);
 
+        if (!payload.sub) {
+            console.error('Payload missing sub:', payload);
+            return c.json({ error: 'Invalid token payload' }, 401);
+        }
+
         const db = c.env.DB;
         const user = await db.prepare('SELECT id, email, created_at FROM users WHERE id = ?')
             .bind(payload.sub).first();
@@ -80,17 +85,19 @@ app.post('/api/ask', async (c) => {
         const token = auth.replace('Bearer ', '');
         const payload = await verify(token, JWT_SECRET);
 
-        const userId = payload.sub;
-        if (!userId) {
-            return c.json({ error: 'Invalid user ID' }, 400);
+        if (!payload.sub) {
+            console.error('Payload missing sub:', payload);
+            return c.json({ error: 'Invalid token payload' }, 401);
         }
+
+        const userId = payload.sub;
 
         const db = c.env.DB;
         const user = await db.prepare('SELECT id FROM users WHERE id = ?')
             .bind(userId).first();
 
         if (!user) {
-            console.error('User not found:', userId);
+            console.error('User not found in DB:', userId);
             return c.json({ error: 'User not found' }, 404);
         }
 
@@ -111,7 +118,7 @@ app.post('/api/ask', async (c) => {
 
         const answer = response.response || 'لم أستطع الإجابة.';
 
-        await db.prepare(
+        const result = await db.prepare(
             `INSERT INTO conversations (id, user_id, message, response, created_at) VALUES (?, ?, ?, ?, ?)`
         ).bind(
             crypto.randomUUID(),
@@ -121,10 +128,12 @@ app.post('/api/ask', async (c) => {
             new Date().toISOString()
         ).run();
 
+        console.log('Insert result:', result);
+
         return c.json({ answer });
     } catch (e) {
         console.error('Ask error:', e);
-        return c.json({ error: 'Internal error' }, 500);
+        return c.json({ error: 'Internal error: ' + (e as Error).message }, 500);
     }
 });
 
@@ -137,10 +146,12 @@ app.get('/api/conversations', async (c) => {
         const token = auth.replace('Bearer ', '');
         const payload = await verify(token, JWT_SECRET);
 
-        const userId = payload.sub;
-        if (!userId) {
-            return c.json({ error: 'Invalid user ID' }, 400);
+        if (!payload.sub) {
+            console.error('Payload missing sub:', payload);
+            return c.json({ error: 'Invalid token payload' }, 401);
         }
+
+        const userId = payload.sub;
 
         const db = c.env.DB;
         const user = await db.prepare('SELECT id FROM users WHERE id = ?')
