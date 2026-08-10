@@ -1,6 +1,5 @@
 // ============================================================
 // وكيل الذكاء الاصطناعي - الواجهة الأمامية
-// مع مصادقة البريد الإلكتروني وعزل المحادثات
 // ============================================================
 
 const API = 'https://support-agent.mohamed-elfal.workers.dev/api';
@@ -23,7 +22,7 @@ const historyList = document.getElementById('history-list');
 let token = localStorage.getItem('token');
 let currentUser = null;
 
-// --- استدعاء API مع المصادقة ---
+// --- استدعاء API ---
 async function apiCall(endpoint, options = {}) {
     const headers = {
         'Content-Type': 'application/json',
@@ -43,13 +42,11 @@ async function apiCall(endpoint, options = {}) {
         throw new Error('جلسة غير صالحة، يرجى تسجيل الدخول مجدداً');
     }
 
-    // 🔥 الحل: قراءة النص أولاً ثم محاولة تحويله إلى JSON
     const text = await response.text();
     let data;
     try {
         data = JSON.parse(text);
     } catch {
-        // إذا لم يكن JSON صالحاً، نعتبره خطأ
         throw new Error(text || `خطأ ${response.status}`);
     }
 
@@ -59,10 +56,17 @@ async function apiCall(endpoint, options = {}) {
     return data;
 }
 
-// --- عرض رسالة ---
+// --- عرض رسالة مؤقتة ---
 function showMessage(element, text, type = '') {
     element.textContent = text;
     element.className = type;
+    // إخفاء الرسالة بعد 5 ثوانٍ
+    setTimeout(() => {
+        if (element.textContent === text) {
+            element.textContent = '';
+            element.className = '';
+        }
+    }, 5000);
 }
 
 // --- تسجيل الدخول ---
@@ -100,6 +104,8 @@ function logout() {
     updateUI();
     messages.innerHTML = '';
     historyList.innerHTML = '';
+    // عرض رسالة الخروج
+    showMessage(loginMessage, '👋 تم تسجيل الخروج', 'success');
 }
 
 // --- تحديث الواجهة ---
@@ -158,7 +164,7 @@ async function sendQuestion() {
     }
 }
 
-// --- إضافة رسالة ---
+// --- إضافة رسالة إلى الشات ---
 function appendMessage(text, role, isLoading = false) {
     const msg = document.createElement('div');
     msg.className = `message ${role}`;
@@ -171,7 +177,7 @@ function appendMessage(text, role, isLoading = false) {
     return msg;
 }
 
-// --- جلب المحادثات الخاصة ---
+// --- جلب المحادثات السابقة ---
 async function loadHistory() {
     if (!token) return;
     try {
