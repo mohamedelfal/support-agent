@@ -22,14 +22,12 @@ const historyList = document.getElementById('history-list');
 let token = localStorage.getItem('token');
 let currentUser = null;
 
-// --- عرض رسالة مؤقتة (مع ضمان الرؤية) ---
+// --- عرض رسالة مؤقتة ---
 function showMessage(element, text, type = '') {
-    // التأكد من أن العنصر موجود ومرئي
     if (!element) return;
     element.textContent = text;
     element.className = type;
-    element.style.display = 'block'; // تأكد من ظهوره
-    // إخفاء الرسالة بعد 5 ثوانٍ
+    element.style.display = 'block';
     clearTimeout(element._timeout);
     element._timeout = setTimeout(() => {
         element.textContent = '';
@@ -38,7 +36,7 @@ function showMessage(element, text, type = '') {
     }, 5000);
 }
 
-// --- استدعاء API ---
+// --- استدعاء API (مع منع استدعاء logout تلقائياً) ---
 async function apiCall(endpoint, options = {}) {
     const headers = {
         'Content-Type': 'application/json',
@@ -53,7 +51,13 @@ async function apiCall(endpoint, options = {}) {
         headers,
     });
 
+    // إذا كان الرد 401 ونحن نحاول التحقق من الجلسة، لا نستدعي logout تلقائياً
     if (response.status === 401) {
+        // فقط إذا كنا نحاول الوصول إلى نقطة محمية ولا يوجد توكن
+        if (endpoint !== '/auth/me' || !token) {
+            // لا تفعل شيئاً، فقط ارمِ خطأ
+            throw new Error('غير مصرح');
+        }
         logout();
         throw new Error('جلسة غير صالحة، يرجى تسجيل الدخول مجدداً');
     }
@@ -76,7 +80,6 @@ async function apiCall(endpoint, options = {}) {
 async function login(email) {
     loginSubmit.disabled = true;
     loginSubmit.textContent = '⏳ جاري...';
-    // عرض رسالة "جاري..." في loginMessage
     showMessage(loginMessage, '⏳ جاري تسجيل الدخول...', '');
 
     try {
@@ -88,11 +91,9 @@ async function login(email) {
         token = data.token;
         currentUser = data.user;
         localStorage.setItem('token', token);
-        
-        // عرض رسالة النجاح قبل تحديث الواجهة
+
         showMessage(loginMessage, '✅ تم تسجيل الدخول بنجاح', 'success');
-        
-        // تحديث الواجهة بعد الرسالة (مع تأخير بسيط)
+
         setTimeout(() => {
             updateUI();
             loadHistory();
@@ -114,7 +115,6 @@ function logout() {
     updateUI();
     messages.innerHTML = '';
     historyList.innerHTML = '';
-    // عرض رسالة الخروج (باستخدام loginMessage)
     showMessage(loginMessage, '👋 تم تسجيل الخروج', 'success');
 }
 
@@ -132,15 +132,26 @@ function updateUI() {
     }
 }
 
-// --- التحقق من الجلسة ---
+// --- التحقق من الجلسة (معدل) ---
 async function checkSession() {
+    // إذا لم يكن هناك توكن، لا نحاول التحقق
+    if (!token) {
+        updateUI();
+        return;
+    }
     try {
         const data = await apiCall('/auth/me');
         currentUser = data.user;
         updateUI();
         loadHistory();
     } catch (e) {
-        console.log('Not logged in');
+        // في حال فشل التحقق (توكن منتهي أو غير صالح)
+        console.log('Session check failed:', e.message);
+        // لا نستدعي logout هنا حتى لا تظهر رسالة الخروج عند تحميل الصفحة
+        token = null;
+        localStorage.removeItem('token');
+        currentUser = null;
+        updateUI();
     }
 }
 
