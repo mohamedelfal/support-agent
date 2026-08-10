@@ -14,7 +14,25 @@
         </header>
 
         <main>
-            <section id="chat-section">
+            <!-- قسم تسجيل الدخول -->
+            <section id="login-section">
+                <h2>🔑 تسجيل الدخول</h2>
+                <form id="loginForm">
+                    <div class="form-group">
+                        <label for="email">البريد الإلكتروني</label>
+                        <input type="email" id="email" placeholder="example@email.com" required />
+                    </div>
+                    <button type="submit" id="loginSubmit">دخول</button>
+                    <div id="loginMessage"></div>
+                </form>
+            </section>
+
+            <!-- قسم الشات (يظهر بعد تسجيل الدخول) -->
+            <section id="chat-section" style="display:none;">
+                <div id="user-info">
+                    <span id="userEmailDisplay"></span>
+                    <button id="logoutBtn">🚪 خروج</button>
+                </div>
                 <div id="messages"></div>
                 <div id="input-area">
                     <input type="text" id="questionInput" placeholder="اكتب سؤالك هنا..." />
@@ -22,8 +40,8 @@
                 </div>
             </section>
 
-            <!-- عرض المحادثات السابقة -->
-            <section id="history-section">
+            <!-- المحادثات السابقة -->
+            <section id="history-section" style="display:none;">
                 <h2>📜 المحادثات السابقة</h2>
                 <div id="history-list"></div>
             </section>
