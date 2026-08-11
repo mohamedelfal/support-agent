@@ -1,6 +1,5 @@
 // ============================================================
 // وكيل الذكاء الاصطناعي - Worker API
-// مع AI Gateway (support-gateway)
 // ============================================================
 
 import { Hono } from 'hono';
@@ -13,13 +12,14 @@ type Env = {
     JWT_SECRET: string;
     RATE_LIMIT_KV: KVNamespace;
     AI_GATEWAY_ID: string;
+    AI_GATEWAY_TOKEN: string;
     CLOUDFLARE_ACCOUNT_ID: string;
 };
 
 const app = new Hono<{ Bindings: Env }>();
 
 // ============================================================
-// 🔒 رؤوس الأمان
+// 🔒 Security Headers
 // ============================================================
 app.use('*', async (c, next) => {
     await next();
@@ -32,7 +32,7 @@ app.use('*', async (c, next) => {
 });
 
 // ============================================================
-// 🔒 CORS (مقيد)
+// 🔒 CORS
 // ============================================================
 app.use('*', cors({
     origin: ['https://support-agent-dxu.pages.dev', 'http://localhost:3000'],
@@ -44,6 +44,7 @@ app.use('*', cors({
 // ============================================================
 // 💚 Health Checks
 // ============================================================
+
 app.get('/health/live', (c) => {
     return c.json({
         status: 'alive',
@@ -73,6 +74,7 @@ app.get('/health/ready', async (c) => {
 // ============================================================
 // 🔐 Rate Limiting
 // ============================================================
+
 async function checkRateLimit(env: Env, email: string): Promise<{ allowed: boolean; remaining?: number; retryAfter?: number }> {
     const kv = env.RATE_LIMIT_KV;
     const key = `login:${email}`;
@@ -106,7 +108,7 @@ async function checkRateLimit(env: Env, email: string): Promise<{ allowed: boole
 }
 
 // ============================================================
-// 🔐 المصادقة (Authentication)
+// 🔐 Authentication
 // ============================================================
 
 app.post('/api/auth/login', async (c) => {
@@ -172,7 +174,7 @@ app.get('/api/auth/me', async (c) => {
 });
 
 // ============================================================
-// 🤖 الوكيل الذكي (مع AI Gateway)
+// 🤖 AI Agent (مع AI Gateway)
 // ============================================================
 
 app.post('/api/ask', async (c) => {
@@ -213,10 +215,13 @@ app.post('/api/ask', async (c) => {
         const accountId = c.env.CLOUDFLARE_ACCOUNT_ID;
         const url = `https://gateway.ai.cloudflare.com/v1/accounts/${accountId}/ai-gateway/${gatewayId}/workers-ai/@cf/qwen/qwen3-30b-a3b-fp8`;
 
+        console.log('Calling AI Gateway:', url);
+
         const aiResponse = await fetch(url, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
+                'Authorization': `Bearer ${c.env.AI_GATEWAY_TOKEN}`
             },
             body: JSON.stringify({
                 messages: [
@@ -228,13 +233,23 @@ app.post('/api/ask', async (c) => {
             }),
         });
 
+        // قراءة الرد كـ نص أولاً لتشخيص الأخطاء
+        const responseText = await aiResponse.text();
+
         if (!aiResponse.ok) {
-            const errorText = await aiResponse.text();
-            console.error('AI Gateway error:', errorText);
-            return c.json({ error: 'AI service error' }, 500);
+            console.error('AI Gateway error:', aiResponse.status, responseText);
+            return c.json({ 
+                error: `AI service error: ${aiResponse.status}` 
+            }, 500);
         }
 
-        const data = await aiResponse.json();
+        let data;
+        try {
+            data = JSON.parse(responseText);
+        } catch {
+            return c.json({ error: 'Invalid response from AI service' }, 500);
+        }
+
         const answer = data.response || data.result?.response || 'لم أستطع الإجابة.';
 
         // حفظ المحادثة في D1
@@ -257,7 +272,7 @@ app.post('/api/ask', async (c) => {
 });
 
 // ============================================================
-// 📜 جلب المحادثات السابقة
+// 📜 Conversations
 // ============================================================
 
 app.get('/api/conversations', async (c) => {
