@@ -1,7 +1,3 @@
-// ============================================================
-// وكيل الذكاء الاصطناعي - الواجهة الأمامية
-// ============================================================
-
 const API = 'https://support-agent.mohamed-elfal.workers.dev/api';
 
 // عناصر DOM
@@ -22,21 +18,7 @@ const historyList = document.getElementById('history-list');
 let token = localStorage.getItem('token');
 let currentUser = null;
 
-// --- عرض رسالة مؤقتة ---
-function showMessage(element, text, type = '') {
-    if (!element) return;
-    element.textContent = text;
-    element.className = type;
-    element.style.display = 'block';
-    clearTimeout(element._timeout);
-    element._timeout = setTimeout(() => {
-        element.textContent = '';
-        element.className = '';
-        element.style.display = 'none';
-    }, 5000);
-}
-
-// --- استدعاء API (مع منع استدعاء logout تلقائياً) ---
+// --- استدعاء API ---
 async function apiCall(endpoint, options = {}) {
     const headers = {
         'Content-Type': 'application/json',
@@ -51,13 +33,7 @@ async function apiCall(endpoint, options = {}) {
         headers,
     });
 
-    // إذا كان الرد 401 ونحن نحاول التحقق من الجلسة، لا نستدعي logout تلقائياً
     if (response.status === 401) {
-        // فقط إذا كنا نحاول الوصول إلى نقطة محمية ولا يوجد توكن
-        if (endpoint !== '/auth/me' || !token) {
-            // لا تفعل شيئاً، فقط ارمِ خطأ
-            throw new Error('غير مصرح');
-        }
         logout();
         throw new Error('جلسة غير صالحة، يرجى تسجيل الدخول مجدداً');
     }
@@ -74,6 +50,20 @@ async function apiCall(endpoint, options = {}) {
         throw new Error(data.error || `خطأ ${response.status}`);
     }
     return data;
+}
+
+// --- عرض رسالة مؤقتة ---
+function showMessage(element, text, type = '') {
+    if (!element) return;
+    element.textContent = text;
+    element.className = type;
+    element.style.display = 'block';
+    clearTimeout(element._timeout);
+    element._timeout = setTimeout(() => {
+        element.textContent = '';
+        element.className = '';
+        element.style.display = 'none';
+    }, 5000);
 }
 
 // --- تسجيل الدخول ---
@@ -132,9 +122,8 @@ function updateUI() {
     }
 }
 
-// --- التحقق من الجلسة (معدل) ---
+// --- التحقق من الجلسة ---
 async function checkSession() {
-    // إذا لم يكن هناك توكن، لا نحاول التحقق
     if (!token) {
         updateUI();
         return;
@@ -145,9 +134,7 @@ async function checkSession() {
         updateUI();
         loadHistory();
     } catch (e) {
-        // في حال فشل التحقق (توكن منتهي أو غير صالح)
         console.log('Session check failed:', e.message);
-        // لا نستدعي logout هنا حتى لا تظهر رسالة الخروج عند تحميل الصفحة
         token = null;
         localStorage.removeItem('token');
         currentUser = null;
