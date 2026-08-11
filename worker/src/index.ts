@@ -1,38 +1,53 @@
 // ============================================================
-// وكيل الذكاء الاصطناعي - Worker API
+// وكيل الذكاء الاصطناعي - Support Agent Worker
+// ============================================================
+// هذا الملف هو النقطة الرئيسية لتشغيل وكيل الدعم الذكي.
+// يتعامل مع طلبات المصادقة، المحادثة، وجلب سجل المحادثات،
+// مع دعم AI Gateway لتقليل التكاليف وتحسين الأداء.
 // ============================================================
 
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { sign, verify } from 'hono/jwt';
 
+// ============================================================
+// تعريف أنواع البيئة (Environment Variables)
+// ============================================================
+// هذه المتغيرات يتم حقنها من Cloudflare أثناء التشغيل،
+// وتشمل مفاتيح الوصول ومعرفات الموارد المطلوبة.
+// ============================================================
 type Env = {
-    AI: Ai;
-    DB: D1Database;
-    JWT_SECRET: string;
-    RATE_LIMIT_KV: KVNamespace;
-    AI_GATEWAY_ID: string;
-    AI_GATEWAY_TOKEN: string;
-    CLOUDFLARE_ACCOUNT_ID: string;
+    AI: Ai;                         // ربط Workers AI (احتياطي)
+    DB: D1Database;                 // قاعدة البيانات D1
+    JWT_SECRET: string;             // المفتاح السري لتوقيع JWT
+    RATE_LIMIT_KV: KVNamespace;     // تخزين مؤقت للحد من معدل الطلبات
+    AI_GATEWAY_ID: string;          // معرف بوابة AI Gateway
+    AI_GATEWAY_TOKEN: string;       // رمز المصادقة الخاص بـ AI Gateway
+    CLOUDFLARE_ACCOUNT_ID: string;  // معرف حساب Cloudflare
 };
 
 const app = new Hono<{ Bindings: Env }>();
 
 // ============================================================
-// 🔒 Security Headers
+// رؤوس الأمان (Security Headers)
+// ============================================================
+// تحسين أمان التطبيق عبر منع هجمات XSS و Clickjacking وغيرها.
 // ============================================================
 app.use('*', async (c, next) => {
     await next();
     c.res.headers.set('X-Content-Type-Options', 'nosniff');
     c.res.headers.set('X-Frame-Options', 'DENY');
     c.res.headers.set('Referrer-Policy', 'strict-origin-when-cross-origin');
-    c.res.headers.set('Content-Security-Policy', 
+    c.res.headers.set(
+        'Content-Security-Policy',
         "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline';"
     );
 });
 
 // ============================================================
-// 🔒 CORS
+// إعدادات CORS
+// ============================================================
+// السماح فقط للنطاقات المصرح لها بالاتصال بالـ API.
 // ============================================================
 app.use('*', cors({
     origin: ['https://support-agent-dxu.pages.dev', 'http://localhost:3000'],
@@ -42,9 +57,10 @@ app.use('*', cors({
 }));
 
 // ============================================================
-// 💚 Health Checks
+// نقاط فحص الصحة (Health Checks)
 // ============================================================
-
+// توفر هذه النقاط معلومات عن حالة التطبيق لخدمات المراقبة.
+// ============================================================
 app.get('/health/live', (c) => {
     return c.json({
         status: 'alive',
@@ -63,27 +79,31 @@ app.get('/health/ready', async (c) => {
             services: { database: 'healthy' },
         });
     } catch (error) {
-        return c.json({
-            status: 'not ready',
-            timestamp: new Date().toISOString(),
-            error: (error as Error).message,
-        }, 503);
+        return c.json(
+            {
+                status: 'not ready',
+                timestamp: new Date().toISOString(),
+                error: (error as Error).message,
+            },
+            503
+        );
     }
 });
 
 // ============================================================
-// 🔐 Rate Limiting
+// الحد من معدل محاولات تسجيل الدخول (Rate Limiting)
 // ============================================================
-
+// يحد من عدد محاولات تسجيل الدخول لكل بريد إلكتروني خلال 15 دقيقة.
+// ============================================================
 async function checkRateLimit(env: Env, email: string): Promise<{ allowed: boolean; remaining?: number; retryAfter?: number }> {
     const kv = env.RATE_LIMIT_KV;
     const key = `login:${email}`;
     const now = Math.floor(Date.now() / 1000);
-    const windowSize = 15 * 60;
+    const windowSize = 15 * 60; // 15 دقيقة
     const maxAttempts = 5;
 
-    let data = await kv.get(key, 'json') as { attempts: number; firstAttempt: number } | null;
-    
+    let data = (await kv.get(key, 'json')) as { attempts: number; firstAttempt: number } | null;
+
     if (!data) {
         await kv.put(key, JSON.stringify({ attempts: 1, firstAttempt: now }), { expirationTtl: windowSize });
         return { allowed: true, remaining: maxAttempts - 1 };
@@ -98,9 +118,9 @@ async function checkRateLimit(env: Env, email: string): Promise<{ allowed: boole
     await kv.put(key, JSON.stringify({ attempts: newAttempts, firstAttempt: data.firstAttempt }), { expirationTtl: windowSize });
 
     if (newAttempts > maxAttempts) {
-        return { 
-            allowed: false, 
-            retryAfter: windowSize - (now - data.firstAttempt) 
+        return {
+            allowed: false,
+            retryAfter: windowSize - (now - data.firstAttempt),
         };
     }
 
@@ -108,9 +128,10 @@ async function checkRateLimit(env: Env, email: string): Promise<{ allowed: boole
 }
 
 // ============================================================
-// 🔐 Authentication
+// المصادقة (Authentication)
 // ============================================================
-
+// توفير تسجيل الدخول باستخدام البريد الإلكتروني وتوليد JWT.
+// ============================================================
 app.post('/api/auth/login', async (c) => {
     try {
         const { email } = await c.req.json();
@@ -118,10 +139,13 @@ app.post('/api/auth/login', async (c) => {
 
         const rateLimit = await checkRateLimit(c.env, email);
         if (!rateLimit.allowed) {
-            return c.json({ 
-                error: `Too many login attempts. Please try again in ${rateLimit.retryAfter} seconds.`,
-                retryAfter: rateLimit.retryAfter 
-            }, 429);
+            return c.json(
+                {
+                    error: `Too many login attempts. Please try again in ${rateLimit.retryAfter} seconds.`,
+                    retryAfter: rateLimit.retryAfter,
+                },
+                429
+            );
         }
 
         const db = c.env.DB;
@@ -132,7 +156,8 @@ app.post('/api/auth/login', async (c) => {
             const id = crypto.randomUUID();
             const now = new Date().toISOString();
             await db.prepare('INSERT INTO users (id, email, created_at) VALUES (?, ?, ?)')
-                .bind(id, cleanEmail, now).run();
+                .bind(id, cleanEmail, now)
+                .run();
             user = { id, email: cleanEmail, created_at: now };
         }
 
@@ -149,6 +174,9 @@ app.post('/api/auth/login', async (c) => {
     }
 });
 
+// ============================================================
+// التحقق من صحة الجلسة الحالية
+// ============================================================
 app.get('/api/auth/me', async (c) => {
     try {
         const auth = c.req.header('Authorization');
@@ -163,7 +191,8 @@ app.get('/api/auth/me', async (c) => {
 
         const db = c.env.DB;
         const user = await db.prepare('SELECT id, email, created_at FROM users WHERE id = ?')
-            .bind(payload.sub).first();
+            .bind(payload.sub)
+            .first();
 
         if (!user) return c.json({ error: 'User not found' }, 404);
         return c.json({ user });
@@ -174,9 +203,10 @@ app.get('/api/auth/me', async (c) => {
 });
 
 // ============================================================
-// 🤖 AI Agent (مع AI Gateway)
+// الوكيل الذكي - معالجة أسئلة المستخدمين
 // ============================================================
-
+// يستقبل سؤال المستخدم، يرسله إلى AI Gateway، ويعيد الإجابة.
+// ============================================================
 app.post('/api/ask', async (c) => {
     try {
         const auth = c.req.header('Authorization');
@@ -192,8 +222,7 @@ app.post('/api/ask', async (c) => {
         const userId = payload.sub;
 
         const db = c.env.DB;
-        const user = await db.prepare('SELECT id FROM users WHERE id = ?')
-            .bind(userId).first();
+        const user = await db.prepare('SELECT id FROM users WHERE id = ?').bind(userId).first();
 
         if (!user) {
             console.error('User not found:', userId);
@@ -205,12 +234,20 @@ app.post('/api/ask', async (c) => {
 
         const MAX_QUESTION_LENGTH = 1000;
         if (question.length > MAX_QUESTION_LENGTH) {
-            return c.json({ 
-                error: `Question is too long. Maximum ${MAX_QUESTION_LENGTH} characters allowed.` 
-            }, 400);
+            return c.json(
+                {
+                    error: `Question is too long. Maximum ${MAX_QUESTION_LENGTH} characters allowed.`,
+                },
+                400
+            );
         }
 
-        // 🔥 استدعاء AI Gateway
+        // ============================================================
+        // استدعاء AI Gateway
+        // ============================================================
+        // باستخدام الهيدر الصحيح cf-aig-authorization (وليس Authorization)
+        // لتوثيق الطلب لدى Gateway.
+        // ============================================================
         const gatewayId = c.env.AI_GATEWAY_ID;
         const accountId = c.env.CLOUDFLARE_ACCOUNT_ID;
         const url = `https://gateway.ai.cloudflare.com/v1/accounts/${accountId}/ai-gateway/${gatewayId}/workers-ai/@cf/qwen/qwen3-30b-a3b-fp8`;
@@ -221,26 +258,24 @@ app.post('/api/ask', async (c) => {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
-                'Authorization': `Bearer ${c.env.AI_GATEWAY_TOKEN}`
+                // 🔥 الهيدر المطلوب لمصادقة Gateway حسب وثائق Cloudflare
+                'cf-aig-authorization': `Bearer ${c.env.AI_GATEWAY_TOKEN}`,
             },
             body: JSON.stringify({
                 messages: [
                     { role: 'system', content: 'أنت مساعد ذكي ومفيد. أجب باللغة العربية.' },
-                    { role: 'user', content: question }
+                    { role: 'user', content: question },
                 ],
                 temperature: 0.2,
                 max_tokens: 800,
             }),
         });
 
-        // قراءة الرد كـ نص أولاً لتشخيص الأخطاء
         const responseText = await aiResponse.text();
 
         if (!aiResponse.ok) {
             console.error('AI Gateway error:', aiResponse.status, responseText);
-            return c.json({ 
-                error: `AI service error: ${aiResponse.status}` 
-            }, 500);
+            return c.json({ error: `AI service error: ${aiResponse.status}` }, 500);
         }
 
         let data;
@@ -252,19 +287,17 @@ app.post('/api/ask', async (c) => {
 
         const answer = data.response || data.result?.response || 'لم أستطع الإجابة.';
 
-        // حفظ المحادثة في D1
-        await db.prepare(
-            `INSERT INTO conversations (id, user_id, message, response, created_at) VALUES (?, ?, ?, ?, ?)`
-        ).bind(
-            crypto.randomUUID(),
-            userId,
-            question,
-            answer,
-            new Date().toISOString()
-        ).run();
+        // ============================================================
+        // حفظ المحادثة في قاعدة البيانات
+        // ============================================================
+        await db
+            .prepare(
+                `INSERT INTO conversations (id, user_id, message, response, created_at) VALUES (?, ?, ?, ?, ?)`
+            )
+            .bind(crypto.randomUUID(), userId, question, answer, new Date().toISOString())
+            .run();
 
         return c.json({ answer });
-
     } catch (e) {
         console.error('Ask error:', e);
         return c.json({ error: 'Internal error: ' + (e as Error).message }, 500);
@@ -272,9 +305,8 @@ app.post('/api/ask', async (c) => {
 });
 
 // ============================================================
-// 📜 Conversations
+// جلب سجل المحادثات السابقة للمستخدم
 // ============================================================
-
 app.get('/api/conversations', async (c) => {
     try {
         const auth = c.req.header('Authorization');
@@ -290,17 +322,19 @@ app.get('/api/conversations', async (c) => {
         const userId = payload.sub;
 
         const db = c.env.DB;
-        const user = await db.prepare('SELECT id FROM users WHERE id = ?')
-            .bind(userId).first();
+        const user = await db.prepare('SELECT id FROM users WHERE id = ?').bind(userId).first();
 
         if (!user) {
             console.error('User not found:', userId);
             return c.json({ error: 'User not found' }, 404);
         }
 
-        const { results } = await db.prepare(
-            'SELECT id, message, response, created_at FROM conversations WHERE user_id = ? ORDER BY created_at DESC LIMIT 50'
-        ).bind(userId).all();
+        const { results } = await db
+            .prepare(
+                'SELECT id, message, response, created_at FROM conversations WHERE user_id = ? ORDER BY created_at DESC LIMIT 50'
+            )
+            .bind(userId)
+            .all();
 
         return c.json({ conversations: results });
     } catch (e) {
