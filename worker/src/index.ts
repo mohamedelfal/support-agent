@@ -1,3 +1,8 @@
+// ============================================================
+// وكيل الذكاء الاصطناعي - Worker API
+// مع AI Gateway (support-gateway)
+// ============================================================
+
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { sign, verify } from 'hono/jwt';
@@ -7,6 +12,8 @@ type Env = {
     DB: D1Database;
     JWT_SECRET: string;
     RATE_LIMIT_KV: KVNamespace;
+    AI_GATEWAY_ID: string;
+    CLOUDFLARE_ACCOUNT_ID: string;
 };
 
 const app = new Hono<{ Bindings: Env }>();
@@ -35,18 +42,37 @@ app.use('*', cors({
 }));
 
 // ============================================================
-// نقطة الصحة
+// 💚 Health Checks
 // ============================================================
-app.get('/health', (c) => c.json({ 
-    status: 'ok', 
-    service: 'AI Agent (Secure)',
-    timestamp: new Date().toISOString()
-}));
+app.get('/health/live', (c) => {
+    return c.json({
+        status: 'alive',
+        timestamp: new Date().toISOString(),
+        uptime: process.uptime(),
+    });
+});
+
+app.get('/health/ready', async (c) => {
+    try {
+        const db = c.env.DB;
+        await db.prepare('SELECT 1').first();
+        return c.json({
+            status: 'ready',
+            timestamp: new Date().toISOString(),
+            services: { database: 'healthy' },
+        });
+    } catch (error) {
+        return c.json({
+            status: 'not ready',
+            timestamp: new Date().toISOString(),
+            error: (error as Error).message,
+        }, 503);
+    }
+});
 
 // ============================================================
-// 🔐 المصادقة (مع Rate Limiting)
+// 🔐 Rate Limiting
 // ============================================================
-
 async function checkRateLimit(env: Env, email: string): Promise<{ allowed: boolean; remaining?: number; retryAfter?: number }> {
     const kv = env.RATE_LIMIT_KV;
     const key = `login:${email}`;
@@ -78,6 +104,10 @@ async function checkRateLimit(env: Env, email: string): Promise<{ allowed: boole
 
     return { allowed: true, remaining: maxAttempts - newAttempts };
 }
+
+// ============================================================
+// 🔐 المصادقة (Authentication)
+// ============================================================
 
 app.post('/api/auth/login', async (c) => {
     try {
@@ -142,7 +172,7 @@ app.get('/api/auth/me', async (c) => {
 });
 
 // ============================================================
-// 🤖 الوكيل الذكي (مع حد أقصى لطول السؤال)
+// 🤖 الوكيل الذكي (مع AI Gateway)
 // ============================================================
 
 app.post('/api/ask', async (c) => {
@@ -178,20 +208,36 @@ app.post('/api/ask', async (c) => {
             }, 400);
         }
 
-        const ai = c.env.AI;
-        if (!ai) return c.json({ error: 'AI unavailable' }, 503);
+        // 🔥 استدعاء AI Gateway
+        const gatewayId = c.env.AI_GATEWAY_ID;
+        const accountId = c.env.CLOUDFLARE_ACCOUNT_ID;
+        const url = `https://gateway.ai.cloudflare.com/v1/accounts/${accountId}/ai-gateway/${gatewayId}/workers-ai/@cf/qwen/qwen3-30b-a3b-fp8`;
 
-        const response = await ai.run('@cf/qwen/qwen3-30b-a3b-fp8', {
-            messages: [
-                { role: 'system', content: 'أنت مساعد ذكي ومفيد. أجب باللغة العربية.' },
-                { role: 'user', content: question }
-            ],
-            temperature: 0.2,
-            max_tokens: 800,
+        const aiResponse = await fetch(url, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                messages: [
+                    { role: 'system', content: 'أنت مساعد ذكي ومفيد. أجب باللغة العربية.' },
+                    { role: 'user', content: question }
+                ],
+                temperature: 0.2,
+                max_tokens: 800,
+            }),
         });
 
-        const answer = response.response || 'لم أستطع الإجابة.';
+        if (!aiResponse.ok) {
+            const errorText = await aiResponse.text();
+            console.error('AI Gateway error:', errorText);
+            return c.json({ error: 'AI service error' }, 500);
+        }
 
+        const data = await aiResponse.json();
+        const answer = data.response || data.result?.response || 'لم أستطع الإجابة.';
+
+        // حفظ المحادثة في D1
         await db.prepare(
             `INSERT INTO conversations (id, user_id, message, response, created_at) VALUES (?, ?, ?, ?, ?)`
         ).bind(
@@ -203,6 +249,7 @@ app.post('/api/ask', async (c) => {
         ).run();
 
         return c.json({ answer });
+
     } catch (e) {
         console.error('Ask error:', e);
         return c.json({ error: 'Internal error: ' + (e as Error).message }, 500);
