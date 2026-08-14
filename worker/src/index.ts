@@ -210,17 +210,18 @@ app.post('/api/ask', async (c) => {
         }
 
         // ============================================================
-        // 🔥 ذاكرة المحادثة: جلب آخر 5 رسائل للمستخدم
+        // 🔥 ذاكرة المحادثة: جلب آخر 5 محادثات (سؤال + إجابة)
         // ============================================================
         const { results: history } = await db.prepare(
-            `SELECT role, content FROM conversations WHERE user_id = ? ORDER BY created_at DESC LIMIT 5`
+            `SELECT message, response FROM conversations WHERE user_id = ? ORDER BY created_at DESC LIMIT 5`
         ).bind(userId).all();
 
-        // بناء السياق (ترتيب زمني من الأقدم إلى الأحدث)
-        const contextMessages = (history || []).reverse().map(msg => ({
-            role: msg.role === 'user' ? 'user' : 'assistant',
-            content: msg.content,
-        }));
+        // بناء السياق من المحادثات السابقة (ترتيب زمني من الأقدم إلى الأحدث)
+        const contextMessages = [];
+        for (const record of (history || []).reverse()) {
+            contextMessages.push({ role: 'user', content: record.message });
+            contextMessages.push({ role: 'assistant', content: record.response });
+        }
 
         // إضافة السؤال الحالي
         const messages = [
