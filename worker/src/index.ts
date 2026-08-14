@@ -1,6 +1,6 @@
 // ============================================================
 // وكيل الذكاء الاصطناعي - Support Agent Worker
-// مع AI Gateway عبر Binding (بدون توكنات يدوية)
+// مع ذاكرة المحادثة (Conversation Memory)
 // ============================================================
 
 import { Hono } from 'hono';
@@ -26,7 +26,7 @@ app.use('*', async (c, next) => {
     c.res.headers.set('X-Content-Type-Options', 'nosniff');
     c.res.headers.set('X-Frame-Options', 'DENY');
     c.res.headers.set('Referrer-Policy', 'strict-origin-when-cross-origin');
-    c.res.headers.set('Content-Security-Policy', 
+    c.res.headers.set('Content-Security-Policy',
         "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline';"
     );
 });
@@ -81,7 +81,7 @@ async function checkRateLimit(env: Env, email: string): Promise<{ allowed: boole
     const maxAttempts = 5;
 
     let data = await kv.get(key, 'json') as { attempts: number; firstAttempt: number } | null;
-    
+
     if (!data) {
         await kv.put(key, JSON.stringify({ attempts: 1, firstAttempt: now }), { expirationTtl: windowSize });
         return { allowed: true, remaining: maxAttempts - 1 };
@@ -96,9 +96,9 @@ async function checkRateLimit(env: Env, email: string): Promise<{ allowed: boole
     await kv.put(key, JSON.stringify({ attempts: newAttempts, firstAttempt: data.firstAttempt }), { expirationTtl: windowSize });
 
     if (newAttempts > maxAttempts) {
-        return { 
-            allowed: false, 
-            retryAfter: windowSize - (now - data.firstAttempt) 
+        return {
+            allowed: false,
+            retryAfter: windowSize - (now - data.firstAttempt),
         };
     }
 
@@ -115,9 +115,9 @@ app.post('/api/auth/login', async (c) => {
 
         const rateLimit = await checkRateLimit(c.env, email);
         if (!rateLimit.allowed) {
-            return c.json({ 
+            return c.json({
                 error: `Too many login attempts. Please try again in ${rateLimit.retryAfter} seconds.`,
-                retryAfter: rateLimit.retryAfter 
+                retryAfter: rateLimit.retryAfter,
             }, 429);
         }
 
@@ -129,7 +129,8 @@ app.post('/api/auth/login', async (c) => {
             const id = crypto.randomUUID();
             const now = new Date().toISOString();
             await db.prepare('INSERT INTO users (id, email, created_at) VALUES (?, ?, ?)')
-                .bind(id, cleanEmail, now).run();
+                .bind(id, cleanEmail, now)
+                .run();
             user = { id, email: cleanEmail, created_at: now };
         }
 
@@ -160,7 +161,8 @@ app.get('/api/auth/me', async (c) => {
 
         const db = c.env.DB;
         const user = await db.prepare('SELECT id, email, created_at FROM users WHERE id = ?')
-            .bind(payload.sub).first();
+            .bind(payload.sub)
+            .first();
 
         if (!user) return c.json({ error: 'User not found' }, 404);
         return c.json({ user });
@@ -171,7 +173,7 @@ app.get('/api/auth/me', async (c) => {
 });
 
 // ============================================================
-// 🤖 الوكيل الذكي (مع AI Gateway عبر Binding)
+// 🤖 الوكيل الذكي (مع ذاكرة المحادثة)
 // ============================================================
 app.post('/api/ask', async (c) => {
     try {
@@ -189,7 +191,8 @@ app.post('/api/ask', async (c) => {
 
         const db = c.env.DB;
         const user = await db.prepare('SELECT id FROM users WHERE id = ?')
-            .bind(userId).first();
+            .bind(userId)
+            .first();
 
         if (!user) {
             console.error('User not found:', userId);
@@ -201,39 +204,51 @@ app.post('/api/ask', async (c) => {
 
         const MAX_QUESTION_LENGTH = 1000;
         if (question.length > MAX_QUESTION_LENGTH) {
-            return c.json({ 
-                error: `Question is too long. Maximum ${MAX_QUESTION_LENGTH} characters allowed.` 
+            return c.json({
+                error: `Question is too long. Maximum ${MAX_QUESTION_LENGTH} characters allowed.`,
             }, 400);
         }
 
         // ============================================================
-        // 🔥 استدعاء Workers AI عبر Gateway باستخدام Binding
-        // لا حاجة لـ AI_GATEWAY_TOKEN أو هيدرات يدوية
+        // 🔥 ذاكرة المحادثة: جلب آخر 5 رسائل للمستخدم
+        // ============================================================
+        const { results: history } = await db.prepare(
+            `SELECT role, content FROM conversations WHERE user_id = ? ORDER BY created_at DESC LIMIT 5`
+        ).bind(userId).all();
+
+        // بناء السياق (ترتيب زمني من الأقدم إلى الأحدث)
+        const contextMessages = (history || []).reverse().map(msg => ({
+            role: msg.role === 'user' ? 'user' : 'assistant',
+            content: msg.content,
+        }));
+
+        // إضافة السؤال الحالي
+        const messages = [
+            { role: 'system', content: 'أنت مساعد ذكي ومفيد. أجب باللغة العربية.' },
+            ...contextMessages,
+            { role: 'user', content: question }
+        ];
+
+        // ============================================================
+        // 🔥 استدعاء Workers AI عبر Gateway (مع السياق)
         // ============================================================
         const response = await c.env.AI.run(
             '@cf/qwen/qwen3-30b-a3b-fp8',
             {
-                messages: [
-                    { role: 'system', content: 'أنت مساعد ذكي ومفيد. أجب باللغة العربية.' },
-                    { role: 'user', content: question }
-                ],
+                messages,
                 temperature: 0.2,
                 max_tokens: 800,
             },
             {
                 gateway: {
-                    id: c.env.AI_GATEWAY_ID, // "support-gateway"
-                    // خيارات إضافية (اختيارية):
-                    // skipCache: false,
-                    // cacheTtl: 3600,
-                    // collectLog: true,
+                    id: c.env.AI_GATEWAY_ID,
                 },
             }
         );
 
         const answer = response.response || 'لم أستطع الإجابة.';
 
-        // حفظ المحادثة في D1
+        // حفظ السؤال والإجابة في D1
         await db.prepare(
             `INSERT INTO conversations (id, user_id, message, response, created_at) VALUES (?, ?, ?, ?, ?)`
         ).bind(
@@ -270,7 +285,8 @@ app.get('/api/conversations', async (c) => {
 
         const db = c.env.DB;
         const user = await db.prepare('SELECT id FROM users WHERE id = ?')
-            .bind(userId).first();
+            .bind(userId)
+            .first();
 
         if (!user) {
             console.error('User not found:', userId);
