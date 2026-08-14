@@ -1,25 +1,30 @@
 // ============================================================
 // وكيل الذكاء الاصطناعي - Support Agent Worker
 // ============================================================
+// الإصدار النهائي (أغسطس 2026)
+// ============================================================
 
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { sign, verify } from 'hono/jwt';
 
+// ============================================================
+// تعريف أنواع البيئة (Environment Variables)
+// ============================================================
 type Env = {
-    AI: Ai;
-    DB: D1Database;
-    JWT_SECRET: string;
-    RATE_LIMIT_KV: KVNamespace;
-    AI_GATEWAY_ID: string;
-    AI_GATEWAY_TOKEN: string;
-    CLOUDFLARE_ACCOUNT_ID: string;
+    AI: Ai;                         // ربط Workers AI (احتياطي)
+    DB: D1Database;                 // قاعدة البيانات D1
+    JWT_SECRET: string;             // المفتاح السري لتوقيع JWT
+    RATE_LIMIT_KV: KVNamespace;     // تخزين مؤقت للحد من معدل الطلبات
+    AI_GATEWAY_ID: string;          // معرف بوابة AI Gateway
+    AI_GATEWAY_TOKEN: string;       // رمز المصادقة الخاص بـ AI Gateway
+    CLOUDFLARE_ACCOUNT_ID: string;  // معرف حساب Cloudflare
 };
 
 const app = new Hono<{ Bindings: Env }>();
 
 // ============================================================
-// Security Headers
+// رؤوس الأمان (Security Headers)
 // ============================================================
 app.use('*', async (c, next) => {
     await next();
@@ -32,7 +37,7 @@ app.use('*', async (c, next) => {
 });
 
 // ============================================================
-// CORS
+// إعدادات CORS
 // ============================================================
 app.use('*', cors({
     origin: ['https://support-agent-dxu.pages.dev', 'http://localhost:3000'],
@@ -42,7 +47,7 @@ app.use('*', cors({
 }));
 
 // ============================================================
-// Health Checks
+// نقاط فحص الصحة (Health Checks)
 // ============================================================
 app.get('/health/live', (c) => {
     return c.json({
@@ -71,13 +76,13 @@ app.get('/health/ready', async (c) => {
 });
 
 // ============================================================
-// Rate Limiting
+// الحد من معدل محاولات تسجيل الدخول (Rate Limiting)
 // ============================================================
 async function checkRateLimit(env: Env, email: string): Promise<{ allowed: boolean; remaining?: number; retryAfter?: number }> {
     const kv = env.RATE_LIMIT_KV;
     const key = `login:${email}`;
     const now = Math.floor(Date.now() / 1000);
-    const windowSize = 15 * 60;
+    const windowSize = 15 * 60; // 15 دقيقة
     const maxAttempts = 5;
 
     let data = await kv.get(key, 'json') as { attempts: number; firstAttempt: number } | null;
@@ -106,7 +111,7 @@ async function checkRateLimit(env: Env, email: string): Promise<{ allowed: boole
 }
 
 // ============================================================
-// Authentication
+// المصادقة (Authentication)
 // ============================================================
 app.post('/api/auth/login', async (c) => {
     try {
@@ -171,7 +176,7 @@ app.get('/api/auth/me', async (c) => {
 });
 
 // ============================================================
-// 🤖 AI Agent (مع AI Gateway - نقطة /compat/chat/completions)
+// 🤖 الوكيل الذكي (مع AI Gateway)
 // ============================================================
 app.post('/api/ask', async (c) => {
     try {
@@ -208,24 +213,29 @@ app.post('/api/ask', async (c) => {
 
         // ============================================================
         // 🔥 استدعاء AI Gateway عبر نقطة /compat/chat/completions
-        // باستخدام الهيدر الصحيح (Authorization مع Cloudflare API Token)
+        // وفقًا لأحدث وثائق Cloudflare (أغسطس 2026):
+        // - استخدم الهيدر cf-aig-authorization مع توكن Cloudflare API
+        // - النموذج مع بادئة workers-ai/
+        // - Authenticated Gateway يجب أن يكون معطلاً
         // ============================================================
         const gatewayId = c.env.AI_GATEWAY_ID;
         const accountId = c.env.CLOUDFLARE_ACCOUNT_ID;
         
         const url = `https://gateway.ai.cloudflare.com/v1/accounts/${accountId}/ai-gateway/${gatewayId}/compat/chat/completions`;
 
-        console.log('Calling AI Gateway:', url);
+        console.log('📤 Calling AI Gateway:', url);
 
-        // 🔥 التغيير الجوهري: استخدام Authorization بدلاً من cf-aig-authorization
         const aiResponse = await fetch(url, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
-                'Authorization': `Bearer ${c.env.AI_GATEWAY_TOKEN}`, // ✅ الهيدر الصحيح
+                // ✅ الهيدر الصحيح لنقاط gateway.ai.cloudflare.com
+                'cf-aig-authorization': `Bearer ${c.env.AI_GATEWAY_TOKEN}`,
+                // ✅ إضافة معرف البوابة للتأكيد
                 'cf-aig-gateway-id': gatewayId,
             },
             body: JSON.stringify({
+                // ✅ النموذج مع بادئة المزود (مطلوب لنقطة /compat)
                 model: 'workers-ai/@cf/qwen/qwen3-30b-a3b-fp8',
                 messages: [
                     { role: 'system', content: 'أنت مساعد ذكي ومفيد. أجب باللغة العربية.' },
@@ -239,7 +249,7 @@ app.post('/api/ask', async (c) => {
         const responseText = await aiResponse.text();
 
         if (!aiResponse.ok) {
-            console.error('AI Gateway error:', aiResponse.status, responseText);
+            console.error('❌ AI Gateway error:', aiResponse.status, responseText);
             return c.json({ 
                 error: `AI service error: ${aiResponse.status}`,
                 details: responseText 
@@ -253,6 +263,7 @@ app.post('/api/ask', async (c) => {
             return c.json({ error: 'Invalid response from AI service' }, 500);
         }
 
+        // ✅ استخراج الإجابة من تنسيق OpenAI
         const answer = data.choices?.[0]?.message?.content || data.response || 'لم أستطع الإجابة.';
 
         // حفظ المحادثة في D1
@@ -268,13 +279,13 @@ app.post('/api/ask', async (c) => {
 
         return c.json({ answer });
     } catch (e) {
-        console.error('Ask error:', e);
+        console.error('❌ Ask error:', e);
         return c.json({ error: 'Internal error: ' + (e as Error).message }, 500);
     }
 });
 
 // ============================================================
-// Conversations
+// 📜 جلب المحادثات السابقة
 // ============================================================
 app.get('/api/conversations', async (c) => {
     try {
