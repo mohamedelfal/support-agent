@@ -1,6 +1,6 @@
 // ============================================================
 // وكيل الذكاء الاصطناعي - Support Agent Worker
-// مع Dynamic Routing (dynamic/support-agent)
+// مع Dynamic Routing ومعالجة دقيقة للاستجابة
 // ============================================================
 
 import { Hono } from 'hono';
@@ -173,7 +173,7 @@ app.get('/api/auth/me', async (c) => {
 });
 
 // ============================================================
-// 🤖 الوكيل الذكي (مع Dynamic Routing)
+// 🤖 الوكيل الذكي (مع Dynamic Routing ومعالجة دقيقة للاستجابة)
 // ============================================================
 app.post('/api/ask', async (c) => {
     try {
@@ -232,7 +232,7 @@ app.post('/api/ask', async (c) => {
         // 🔥 استدعاء Workers AI عبر Dynamic Routing
         // ============================================================
         const response = await c.env.AI.run(
-            'dynamic/support-agent', // 🎯 المسار الديناميكي
+            'dynamic/support-agent', // المسار الديناميكي
             {
                 messages,
                 temperature: 0.2,
@@ -245,9 +245,30 @@ app.post('/api/ask', async (c) => {
             }
         );
 
-        const answer = response.response || 'لم أستطع الإجابة.';
+        // ============================================================
+        // 🔥 معالجة دقيقة للاستجابة
+        // ============================================================
+        console.log('🔍 AI Response:', JSON.stringify(response, null, 2));
 
-        // حفظ السؤال والإجابة في D1
+        // محاولة استخراج الإجابة من عدة أماكن محتملة
+        const answer = 
+            response?.response || // Workers AI المباشر
+            response?.choices?.[0]?.message?.content || // تنسيق OpenAI
+            response?.result?.response || // تنسيق بديل
+            response?.output?.text || // تنسيق قديم
+            response?.content || // تنسيق آخر
+            response?.text || // تنسيق آخر
+            response?.message?.content || // تنسيق آخر
+            null;
+
+        if (!answer) {
+            console.error('❌ No answer found in response:', JSON.stringify(response, null, 2));
+            return c.json({ error: 'Failed to extract answer from AI response' }, 500);
+        }
+
+        // ============================================================
+        // 💾 حفظ المحادثة في D1
+        // ============================================================
         await db.prepare(
             `INSERT INTO conversations (id, user_id, message, response, created_at) VALUES (?, ?, ?, ?, ?)`
         ).bind(
@@ -260,7 +281,7 @@ app.post('/api/ask', async (c) => {
 
         return c.json({ answer });
     } catch (e) {
-        console.error('Ask error:', e);
+        console.error('❌ Ask error:', e);
         return c.json({ error: 'Internal error: ' + (e as Error).message }, 500);
     }
 });
