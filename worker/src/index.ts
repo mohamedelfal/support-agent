@@ -1,6 +1,5 @@
 // ============================================================
 // وكيل الذكاء الاصطناعي - Support Agent Worker
-// مع AI Gateway عبر نقطة النهاية المتوافقة مع OpenAI
 // ============================================================
 
 import { Hono } from 'hono';
@@ -209,23 +208,25 @@ app.post('/api/ask', async (c) => {
 
         // ============================================================
         // 🔥 استدعاء AI Gateway عبر نقطة /compat/chat/completions
+        // باستخدام الهيدر الصحيح (Authorization مع Cloudflare API Token)
         // ============================================================
         const gatewayId = c.env.AI_GATEWAY_ID;
         const accountId = c.env.CLOUDFLARE_ACCOUNT_ID;
         
-        // 🔥 النقطة الجديدة (المتوافقة مع OpenAI)
         const url = `https://gateway.ai.cloudflare.com/v1/accounts/${accountId}/ai-gateway/${gatewayId}/compat/chat/completions`;
 
-        // 🔥 يجب أن يحتوي حقل model على بادئة المزود (workers-ai/)
+        console.log('Calling AI Gateway:', url);
+
+        // 🔥 التغيير الجوهري: استخدام Authorization بدلاً من cf-aig-authorization
         const aiResponse = await fetch(url, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
-                'cf-aig-authorization': `Bearer ${c.env.AI_GATEWAY_TOKEN}`,
+                'Authorization': `Bearer ${c.env.AI_GATEWAY_TOKEN}`, // ✅ الهيدر الصحيح
                 'cf-aig-gateway-id': gatewayId,
             },
             body: JSON.stringify({
-                model: 'workers-ai/@cf/qwen/qwen3-30b-a3b-fp8', // ✅ الصيغة الصحيحة
+                model: 'workers-ai/@cf/qwen/qwen3-30b-a3b-fp8',
                 messages: [
                     { role: 'system', content: 'أنت مساعد ذكي ومفيد. أجب باللغة العربية.' },
                     { role: 'user', content: question }
@@ -239,7 +240,10 @@ app.post('/api/ask', async (c) => {
 
         if (!aiResponse.ok) {
             console.error('AI Gateway error:', aiResponse.status, responseText);
-            return c.json({ error: `AI service error: ${aiResponse.status}` }, 500);
+            return c.json({ 
+                error: `AI service error: ${aiResponse.status}`,
+                details: responseText 
+            }, 500);
         }
 
         let data;
@@ -249,7 +253,6 @@ app.post('/api/ask', async (c) => {
             return c.json({ error: 'Invalid response from AI service' }, 500);
         }
 
-        // 🔥 استخراج الإجابة (تنسيق OpenAI)
         const answer = data.choices?.[0]?.message?.content || data.response || 'لم أستطع الإجابة.';
 
         // حفظ المحادثة في D1
