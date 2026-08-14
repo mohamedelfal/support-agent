@@ -1,6 +1,6 @@
 // ============================================================
 // وكيل الذكاء الاصطناعي - Support Agent Worker
-// مع ذاكرة المحادثة (Conversation Memory)
+// مع Dynamic Routing (dynamic/support-agent)
 // ============================================================
 
 import { Hono } from 'hono';
@@ -173,7 +173,7 @@ app.get('/api/auth/me', async (c) => {
 });
 
 // ============================================================
-// 🤖 الوكيل الذكي (مع ذاكرة المحادثة)
+// 🤖 الوكيل الذكي (مع Dynamic Routing)
 // ============================================================
 app.post('/api/ask', async (c) => {
     try {
@@ -210,20 +210,18 @@ app.post('/api/ask', async (c) => {
         }
 
         // ============================================================
-        // 🔥 ذاكرة المحادثة: جلب آخر 5 محادثات (سؤال + إجابة)
+        // 🔥 جلب آخر 5 محادثات للسياق
         // ============================================================
         const { results: history } = await db.prepare(
             `SELECT message, response FROM conversations WHERE user_id = ? ORDER BY created_at DESC LIMIT 5`
         ).bind(userId).all();
 
-        // بناء السياق من المحادثات السابقة (ترتيب زمني من الأقدم إلى الأحدث)
         const contextMessages = [];
         for (const record of (history || []).reverse()) {
             contextMessages.push({ role: 'user', content: record.message });
             contextMessages.push({ role: 'assistant', content: record.response });
         }
 
-        // إضافة السؤال الحالي
         const messages = [
             { role: 'system', content: 'أنت مساعد ذكي ومفيد. أجب باللغة العربية.' },
             ...contextMessages,
@@ -231,10 +229,10 @@ app.post('/api/ask', async (c) => {
         ];
 
         // ============================================================
-        // 🔥 استدعاء Workers AI عبر Gateway (مع السياق)
+        // 🔥 استدعاء Workers AI عبر Dynamic Routing
         // ============================================================
         const response = await c.env.AI.run(
-            '@cf/qwen/qwen3-30b-a3b-fp8',
+            'dynamic/support-agent', // 🎯 المسار الديناميكي
             {
                 messages,
                 temperature: 0.2,
