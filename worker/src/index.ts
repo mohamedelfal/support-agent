@@ -24,15 +24,12 @@ const app = new Hono<{ Bindings: Env }>();
 // 1. تعريف الأدوات (Server-Side Tools)
 // ============================================================
 
-// أداة الاستعلام عن حالة الطلب
 const getOrderStatusTool = tool({
     description: 'استعلام عن حالة طلب محدد باستخدام رقم الطلب',
     parameters: z.object({
         orderNumber: z.string().describe('رقم الطلب الذي يريد العميل الاستعلام عنه'),
     }),
     execute: async ({ orderNumber }, { db, userId }) => {
-        // محاكاة الاستعلام عن الطلب من قاعدة البيانات
-        // في التطوير الفعلي، يتم استبدال هذا بكود حقيقي للاستعلام عن الطلبات
         const order = await (db as any).prepare(
             'SELECT status, tracking_number FROM orders WHERE id = ? AND user_id = ?'
         ).bind(orderNumber, userId).first();
@@ -45,17 +42,6 @@ const getOrderStatusTool = tool({
     },
 });
 
-// أداة إنشاء تذكرة دعم جديدة (مع منطق التأكيد)
-const createTicketTool = tool({
-    description: 'إنشاء تذكرة دعم جديدة لمشكلة يواجهها العميل',
-    parameters: z.object({
-        issue: z.string().describe('وصف المشكلة التي يواجهها العميل'),
-    }),
-    // لن نقوم بتنفيذ execute هنا، بل سنستخدمها كـ Client-Side Tool
-    // لتأكيد المستخدم قبل الإنشاء
-});
-
-// أداة تحديث الملف الشخصي
 const updateProfileTool = tool({
     description: 'تحديث البريد الإلكتروني للمستخدم',
     parameters: z.object({
@@ -74,21 +60,17 @@ const updateProfileTool = tool({
 // ============================================================
 
 class SupportAgent extends AIChatAgent<Env> {
-    // تمرير userId من السياق
     constructor(env: Env, userId: string) {
         super(env);
         this.userId = userId;
     }
 
     async onChatMessage() {
-        // دمج الأدوات في كائن واحد
         const tools = {
             getOrderStatus: getOrderStatusTool,
             updateProfile: updateProfileTool,
-            // createTicketTool سيتم التعامل معها كـ Client-Side Tool
         };
 
-        // نظام التعليمات (System Prompt) المبسط
         const systemPrompt = `أنت وكيل دعم فني محترف.
 
 تعليماتك:
@@ -97,7 +79,6 @@ class SupportAgent extends AIChatAgent<Env> {
 - عندما يطلب العميل إنشاء تذكرة دعم، أخبره أنك ستقوم بإنشائها بعد تأكيده.
 - أجب باللغة العربية الفصحى فقط وبإجابة مختصرة وواضحة.`;
 
-        // استدعاء النموذج مع الأدوات
         const result = await this.ai.streamText({
             model: '@cf/meta/llama-3.2-3b-instruct',
             messages: this.messages,
@@ -131,10 +112,8 @@ app.post('/api/ask', async (c) => {
         const { question } = await c.req.json();
         if (!question) return c.json({ error: 'Question required' }, 400);
 
-        // إنشاء وكيل جديد لكل طلب
         const agent = new SupportAgent(c.env, userId);
 
-        // محاكاة طلب WebSocket لـ AIChatAgent
         const body = JSON.stringify({
             messages: [{ role: 'user', content: question }]
         });
@@ -147,7 +126,6 @@ app.post('/api/ask', async (c) => {
         const response = await agent.fetch(request);
         const data = await response.json();
 
-        // استخراج الرد من response
         let answer = data?.messages?.[data.messages.length - 1]?.content || 'عذراً، لم أستطع معالجة طلبك.';
 
         return c.json({ answer });
@@ -161,7 +139,7 @@ app.post('/api/ask', async (c) => {
 });
 
 // ============================================================
-// 4. نقاط النهاية الأخرى (نفس الكود السابق)
+// 4. نقاط النهاية الأخرى
 // ============================================================
 
 // ... (نقاط النهاية الخاصة بـ Security, CORS, Health, Auth, و Conversations تبقى كما هي)
