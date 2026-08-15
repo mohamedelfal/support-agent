@@ -13,6 +13,22 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
+      
+      # إنشاء Agent Memory Namespace تلقائياً
+      - name: Create Agent Memory Namespace
+        run: |
+          echo "Creating Agent Memory Namespace: support-agent-memory"
+          RESPONSE=$(curl -s -X POST "https://api.cloudflare.com/client/v4/accounts/${{ secrets.CLOUDFLARE_ACCOUNT_ID }}/agent_memory/namespaces" \
+            -H "Authorization: Bearer ${{ secrets.CLOUDFLARE_API_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            -d '{"name": "support-agent-memory"}')
+          echo "Response: $RESPONSE"
+          if echo "$RESPONSE" | grep -q '"success":true'; then
+            echo "✅ Namespace created successfully."
+          else
+            echo "⚠️ Namespace might already exist or an error occurred. Continuing..."
+          fi
+      
       - run: cd worker && npm install
       - run: cd worker && npx wrangler deploy
         env:
