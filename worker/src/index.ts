@@ -1,13 +1,10 @@
 // ============================================================
-// وكيل دعم عملاء - مع ذاكرة قصيرة وطويلة المدى
-// يجمع بين الكود الأصلي و AIChatAgent و Agent Memory
+// وكيل دعم عملاء - نسخة مبسّطة مع Agent Memory
 // ============================================================
 
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { sign, verify } from 'hono/jwt';
-import { AIChatAgent } from '@cloudflare/ai-chat';
-import { createWorkersAI } from 'workers-ai-provider';
 
 type Env = {
     AI: Ai;
@@ -16,7 +13,7 @@ type Env = {
     RATE_LIMIT_KV: KVNamespace;
     AI_GATEWAY_ID: string;
     CLOUDFLARE_ACCOUNT_ID: string;
-    MEMORY: AgentMemoryNamespace; // Binding الذاكرة الجديد
+    MEMORY: AgentMemoryNamespace;
 };
 
 const app = new Hono<{ Bindings: Env }>();
@@ -176,68 +173,7 @@ app.get('/api/auth/me', async (c) => {
 });
 
 // ============================================================
-// 🤖 وكيل AIChatAgent المخصص (مع الذاكرة)
-// ============================================================
-class SupportAgent extends AIChatAgent<Env> {
-    // تمرير userId من السياق
-    constructor(env: Env, userId: string) {
-        super(env);
-        this.userId = userId; // يُستخدم لتحديد جلسة المحادثة
-    }
-
-    async onChatMessage() {
-        const workersai = createWorkersAI({ binding: this.env.AI });
-
-        // الحصول على ملف تعريف المستخدم من الذاكرة طويلة المدى
-        // نستخدم userId كـ profileName للتمييز بين المستخدمين
-        const profile = this.env.MEMORY.getProfile(this.userId);
-
-        // 1. استرجاع ذكريات سابقة متعلقة بالسؤال
-        let memoryContext = '';
-        try {
-            const lastMessage = this.messages[this.messages.length - 1];
-            if (lastMessage && lastMessage.content) {
-                const recallResult = await profile.recall(lastMessage.content);
-                if (recallResult && recallResult.answer) {
-                    memoryContext = `\n\nمعلومات من ذاكرة المحادثات السابقة: ${recallResult.answer}`;
-                }
-            }
-        } catch (e) {
-            console.error('خطأ في استرجاع الذاكرة:', e);
-        }
-
-        // 2. System Prompt القصير (سطر واحد) مع سياق الذاكرة
-        const systemPrompt = `أنت وكيل دعم فني. أجب بالعربية الفصحى فقط وبإجابة مختصرة (جملتين كحد أقصى). استخدم المعلومات التالية من ذاكرة العميل إذا كانت مفيدة: ${memoryContext}`;
-
-        // 3. استدعاء النموذج مع تاريخ المحادثة الكامل (this.messages)
-        const result = await workersai.streamText({
-            model: '@cf/meta/llama-3.2-3b-instruct',
-            messages: this.messages,
-            system: systemPrompt,
-            temperature: 0.3,
-            max_tokens: 256,
-        });
-
-        // 4. حفظ الذكريات الجديدة تلقائياً (بعد انتهاء الرد)
-        try {
-            const lastMessage = this.messages[this.messages.length - 1];
-            if (lastMessage && lastMessage.content) {
-                await profile.ingest([
-                    { role: 'user', content: lastMessage.content }
-                ]);
-                // يمكن إضافة رد الوكيل أيضاً إذا رغبت
-                // لكن ingest() تستخرج الذكريات تلقائياً من المحادثة
-            }
-        } catch (e) {
-            console.error('خطأ في حفظ الذاكرة:', e);
-        }
-
-        return result.toUIMessageStreamResponse();
-    }
-}
-
-// ============================================================
-// نقطة /ask المعدلة لاستخدام AIChatAgent
+// 🤖 نقطة /ask (مع Agent Memory)
 // ============================================================
 app.post('/api/ask', async (c) => {
     try {
@@ -253,9 +189,16 @@ app.post('/api/ask', async (c) => {
 
         const userId = payload.sub;
 
-        // ============================================================
-        // 1. البحث في المعرفة (للسياسات) - نفس الكود القديم
-        // ============================================================
+        const db = c.env.DB;
+        const user = await db.prepare('SELECT id FROM users WHERE id = ?')
+            .bind(userId)
+            .first();
+
+        if (!user) {
+            console.error('User not found:', userId);
+            return c.json({ error: 'User not found' }, 404);
+        }
+
         const { question } = await c.req.json();
         if (!question) return c.json({ error: 'Question required' }, 400);
 
@@ -266,13 +209,15 @@ app.post('/api/ask', async (c) => {
             }, 400);
         }
 
-        // نبحث في جدول knowledge عن تطابق للسياسات
+        // ============================================================
+        // 1. البحث عن سياسة في جدول المعرفة (رد مباشر)
+        // ============================================================
         const words = question.split(' ').filter(w => w.length > 2);
         let knowledgeAnswer = '';
         let foundKnowledge = false;
 
         for (const word of words) {
-            const knowledgeResults = await c.env.DB.prepare(
+            const knowledgeResults = await db.prepare(
                 `SELECT answer FROM knowledge 
                  WHERE question LIKE ? OR keywords LIKE ? 
                  LIMIT 1`
@@ -285,9 +230,8 @@ app.post('/api/ask', async (c) => {
             }
         }
 
-        // إذا وجدنا سياسة، نرد مباشرة (بدون AIChatAgent)
         if (foundKnowledge) {
-            await c.env.DB.prepare(
+            await db.prepare(
                 `INSERT INTO conversations (id, user_id, message, response, created_at) VALUES (?, ?, ?, ?, ?)`
             ).bind(
                 crypto.randomUUID(),
@@ -300,29 +244,82 @@ app.post('/api/ask', async (c) => {
         }
 
         // ============================================================
-        // 2. للأسئلة العامة: استخدام AIChatAgent مع الذاكرة
+        // 2. استرجاع الذاكرة طويلة المدى (Agent Memory)
         // ============================================================
-        const agent = new SupportAgent(c.env, userId);
-        
-        // نقوم بمحاكاة طلب WebSocket لـ AIChatAgent
-        // نحتاج إلى تمرير الرسالة كـ Request
-        const body = JSON.stringify({
-            messages: [{ role: 'user', content: question }]
-        });
-        const request = new Request('https://agent', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: body
-        });
+        const profile = c.env.MEMORY.getProfile(userId);
+        let memoryContext = '';
+        try {
+            const recallResult = await profile.recall(question);
+            if (recallResult && recallResult.answer) {
+                memoryContext = `\n\nمعلومات من ذاكرة المحادثات السابقة: ${recallResult.answer}`;
+            }
+        } catch (e) {
+            console.error('خطأ في استرجاع الذاكرة:', e);
+        }
 
-        const response = await agent.fetch(request);
-        const data = await response.json();
-        
-        // استخراج الرد من response
-        let answer = data?.messages?.[data.messages.length - 1]?.content || 'عذراً، لم أستطع معالجة طلبك.';
+        // ============================================================
+        // 3. بناء System Prompt مع سياق الذاكرة
+        // ============================================================
+        const systemPrompt = `أنت وكيل دعم فني. أجب بالعربية الفصحى فقط وبإجابة مختصرة (جملتين كحد أقصى). استخدم المعلومات التالية من ذاكرة العميل إذا كانت مفيدة: ${memoryContext}`;
 
-        // حفظ المحادثة في D1 (للتاريخ)
-        await c.env.DB.prepare(
+        // ============================================================
+        // 4. استدعاء النموذج
+        // ============================================================
+        let response;
+        try {
+            response = await c.env.AI.run(
+                '@cf/meta/llama-3.2-3b-instruct',
+                {
+                    messages: [
+                        { role: 'system', content: systemPrompt },
+                        { role: 'user', content: question }
+                    ],
+                    temperature: 0.3,
+                    max_tokens: 256,
+                }
+            );
+        } catch (aiError) {
+            const errorMsg = (aiError as Error).message || 'خطأ غير معروف';
+            console.error('❌ AI Error:', errorMsg);
+            return c.json({ 
+                answer: '⚠️ عذراً، حدث خطأ في الذكاء الاصطناعي. حاول مرة أخرى.' 
+            }, 200);
+        }
+
+        // ============================================================
+        // 5. استخراج الرد
+        // ============================================================
+        let answer = 
+            response?.response ||
+            response?.choices?.[0]?.message?.content ||
+            response?.result?.response ||
+            response?.output?.text ||
+            response?.content ||
+            response?.text ||
+            response?.message?.content ||
+            null;
+
+        if (!answer) {
+            answer = '⚠️ عذراً، لم أستطع معالجة طلبك. حاول مرة أخرى.';
+        }
+
+        answer = answer.trim();
+
+        // ============================================================
+        // 6. حفظ الذاكرة (Agent Memory)
+        // ============================================================
+        try {
+            await profile.ingest([
+                { role: 'user', content: question }
+            ]);
+        } catch (e) {
+            console.error('خطأ في حفظ الذاكرة:', e);
+        }
+
+        // ============================================================
+        // 7. حفظ المحادثة في D1
+        // ============================================================
+        await db.prepare(
             `INSERT INTO conversations (id, user_id, message, response, created_at) VALUES (?, ?, ?, ?, ?)`
         ).bind(
             crypto.randomUUID(),
@@ -336,14 +333,14 @@ app.post('/api/ask', async (c) => {
 
     } catch (e) {
         console.error('❌ Ask error:', e);
-        return c.json({
-            answer: '⚠️ عذراً، حدث خطأ في النظام. حاول مرة أخرى.'
+        return c.json({ 
+            answer: '⚠️ عذراً، حدث خطأ في النظام. حاول مرة أخرى.' 
         }, 200);
     }
 });
 
 // ============================================================
-// 📜 جلب المحادثات السابقة (نفس الكود القديم)
+// 📜 جلب المحادثات السابقة
 // ============================================================
 app.get('/api/conversations', async (c) => {
     try {
