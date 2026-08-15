@@ -1,5 +1,6 @@
 // ============================================================
-// وكيل دعم عملاء - الإصدار النهائي (Llama 3.2 3B)
+// وكيل دعم عملاء - الإصدار المحسّن النهائي (Llama 3.2 3B)
+// مع تحسين استرجاع السياسات، شخصية واضحة، ودقة لغوية
 // ============================================================
 
 import { Hono } from 'hono';
@@ -172,7 +173,7 @@ app.get('/api/auth/me', async (c) => {
 });
 
 // ============================================================
-// 🤖 الوكيل الذكي - الإصدار النهائي (Llama 3.2 3B)
+// 🤖 الوكيل الذكي - الإصدار المحسّن النهائي
 // ============================================================
 app.post('/api/ask', async (c) => {
     try {
@@ -209,7 +210,7 @@ app.post('/api/ask', async (c) => {
         }
 
         // ============================================================
-        // 1. جلب آخر 5 محادثات للسياق
+        // 1. جلب آخر 5 محادثات للسياق (نظيفة)
         // ============================================================
         const { results: history } = await db.prepare(
             `SELECT message, response FROM conversations WHERE user_id = ? ORDER BY created_at DESC LIMIT 5`
@@ -218,93 +219,95 @@ app.post('/api/ask', async (c) => {
         let contextText = '';
         if (history && history.length > 0) {
             const reversed = history.reverse();
-            contextText = 'المحادثات السابقة مع هذا العميل:\n';
+            contextText = 'المحادثات السابقة مع العميل:\n';
             for (const record of reversed) {
                 contextText += `- سؤال: ${record.message}\n- رد: ${record.response}\n`;
             }
         }
 
         // ============================================================
-        // 2. البحث في المعرفة (فقط للأسئلة التي قد تتعلق بالسياسات)
+        // 2. 🔥 تحسين استرجاع السياسات (أفضل ممارسة RAG)
         // ============================================================
-        const policyKeywords = ['شحن', 'توصيل', 'استرجاع', 'مرتجع', 'كلمة السر', 'باسورد', 'حساب', 'دفع', 'كارت', 'تحويل', 'سياسة'];
-        const isPolicyQuestion = policyKeywords.some(keyword => question.includes(keyword));
-
+        // نستخرج الكلمات المفتاحية من السؤال
+        const words = question.split(' ').filter(w => w.length > 2);
         let knowledgeText = '';
         let foundKnowledge = false;
 
-        if (isPolicyQuestion) {
-            const words = question.split(' ').filter(w => w.length > 2);
-            for (const word of words) {
-                const knowledgeResults = await db.prepare(
-                    `SELECT question, answer FROM knowledge 
-                     WHERE question LIKE ? OR keywords LIKE ? 
-                     LIMIT 1`
-                ).bind(`%${word}%`, `%${word}%`).all();
+        // نبحث عن أفضل تطابق في المعرفة
+        for (const word of words) {
+            const knowledgeResults = await db.prepare(
+                `SELECT question, answer FROM knowledge 
+                 WHERE question LIKE ? OR keywords LIKE ? 
+                 LIMIT 1`
+            ).bind(`%${word}%`, `%${word}%`).all();
 
-                if (knowledgeResults.results && knowledgeResults.results.length > 0) {
-                    const k = knowledgeResults.results[0];
-                    knowledgeText = `معلومة رسمية من سياسة الشركة:\nسؤال: ${k.question}\nجواب: ${k.answer}`;
+            if (knowledgeResults.results && knowledgeResults.results.length > 0) {
+                const k = knowledgeResults.results[0];
+                // نضمن أن السؤال يتعلق بالفعل بالسياسة (فحص إضافي)
+                if (k.question.includes(word) || k.keywords.includes(word)) {
+                    knowledgeText = `سياسة الشركة الرسمية:\nسؤال: ${k.question}\nجواب: ${k.answer}`;
                     foundKnowledge = true;
                     break;
                 }
             }
         }
 
-        // ============================================================
-        // 3. بناء System Prompt مع تعليمات دقيقة للمعرفة العامة
-        // ============================================================
-        let systemPrompt = '';
-
+        // إذا وجدنا سياسة، نرد مباشرة (بدون استدعاء النموذج) لضمان الدقة
         if (foundKnowledge) {
-            systemPrompt = `أنت وكيل دعم عملاء محترف في شركة عالمية.
-
-**تعليماتك الأساسية:**
-- استخدم المعلومة الرسمية من سياسة الشركة المقدمة لك في ردك.
-- يمكنك إعادة صياغة المعلومة بأسلوبك الخاص مع الحفاظ على المعنى الدقيق.
-- لا تذكر عبارة "من سياسة الشركة" في ردك، بل ادمج المعلومة بشكل طبيعي.
-- إذا كان السؤال يحتوي على جوانب إضافية خارج المعلومة، يمكنك الإجابة من معرفتك العامة.
-- رد دائماً باللغة العربية الفصحى بأسلوب مهذب وواضح ومفصل.
-
-${knowledgeText}
-
-${contextText ? `\n${contextText}` : ''}
-
-سؤال العميل: ${question}`;
-        } else {
-            systemPrompt = `أنت وكيل دعم عملاء محترف في شركة عالمية، ولديك معرفة واسعة في جميع المجالات.
-
-**تعليماتك:**
-- أجب على سؤال العميل بأفضل ما لديك من معرفة عامة ودقيقة.
-- قدم إجابات شاملة ومفصلة، مع شرح المصطلحات والمفاهيم عند الحاجة.
-- إذا كان السؤال يتعلق بسياسات الشركة (مثل الشحن، الاسترجاع، الحساب) ولا تعرف الإجابة الدقيقة، اعتذر واطلب من العميل التواصل مع الدعم البشري.
-- بالنسبة للأسئلة العامة والتقنية، أجب بحرية من معرفتك مع الحرص على الدقة.
-- إذا كان السؤال غير واضح، اطلب توضيحاً بأسلوب مهذب.
-- رد دائماً باللغة العربية الفصحى بأسلوب مهذب وواضح ومفصل.
-
-${contextText ? `\n${contextText}` : ''}
-
-سؤال العميل: ${question}`;
+            const answer = knowledgeText.replace('سياسة الشركة الرسمية:\nسؤال: ', '').replace('\nجواب: ', '\n\n');
+            // حفظ المحادثة
+            await db.prepare(
+                `INSERT INTO conversations (id, user_id, message, response, created_at) VALUES (?, ?, ?, ?, ?)`
+            ).bind(
+                crypto.randomUUID(),
+                userId,
+                question,
+                answer,
+                new Date().toISOString()
+            ).run();
+            return c.json({ answer });
         }
 
         // ============================================================
-        // 4. استدعاء النموذج (Llama 3.2 3B - التوازن المثالي)
+        // 3. بناء System Prompt مع شخصية واضحة ودقة لغوية
+        // ============================================================
+        const systemPrompt = `أنت وكيل دعم عملاء محترف في شركة عالمية.
+
+**شخصيتك:**
+- أنت ودود، مهذب، ومتفهم.
+- تقدم إجابات دقيقة وواضحة ومفصلة.
+- تستخدم اللغة العربية الفصحى بطلاقة ودقة.
+
+**تعليماتك الأساسية:**
+- أجب على سؤال العميل بأفضل ما لديك من معرفة عامة دقيقة.
+- إذا كان السؤال يتعلق بسياسات الشركة (مثل الشحن، الاسترجاع، الحساب)، اعتذر بلطف واطلب من العميل التواصل مع الدعم البشري للحصول على إجابة دقيقة.
+- بالنسبة للأسئلة العامة والتقنية، قدم شرحاً وافياً ومفهوماً.
+- إذا كان السؤال غير واضح، اطلب توضيحاً بأسلوب مهذب.
+- لا تذكر أبداً أنك "نموذج لغوي" أو "ذكاء اصطناعي"، بل قل "أنا وكيل الدعم الفني".
+- كن مختصراً في ردودك، ولكن لا تضحِ بالدقة.
+
+${contextText ? `\n${contextText}` : ''}
+
+سؤال العميل: ${question}`;
+
+        // ============================================================
+        // 4. استدعاء النموذج (Llama 3.2 3B مع إعدادات محسّنة)
         // ============================================================
         let response;
         try {
             response = await c.env.AI.run(
-                '@cf/meta/llama-3.2-3b-instruct', // ✅ نموذج 3B المتوازن
+                '@cf/meta/llama-3.2-3b-instruct',
                 {
                     messages: [
                         { role: 'system', content: systemPrompt },
                         { role: 'user', content: question }
                     ],
-                    temperature: 0.7,          // ✅ أعلى قليلاً للإبداع والدقة
-                    max_tokens: 1024,          // ✅ زيادة الرموز للإجابات المفصلة
-                    top_p: 0.95,               // ✅ أفضل ممارسة لـ Top-P
-                    repetition_penalty: 1.15,  // ✅ منع التكرار بقوة معتدلة
-                    frequency_penalty: 0.6,    // ✅ تقليل تكرار الكلمات
-                    presence_penalty: 0.3,     // ✅ تشجيع التنوع في الموضوعات
+                    temperature: 0.6,          // ✅ توازن بين الإبداع والدقة
+                    max_tokens: 800,           // ✅ إجابات كافية ومفصلة
+                    top_p: 0.9,               // ✅ أفضل ممارسة
+                    repetition_penalty: 1.15, // ✅ منع التكرار
+                    frequency_penalty: 0.5,   // ✅ تقليل تكرار الكلمات
+                    presence_penalty: 0.3,    // ✅ تشجيع التنوع
                 }
             );
         } catch (aiError) {
