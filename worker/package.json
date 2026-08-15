@@ -6,13 +6,13 @@
     "deploy": "wrangler deploy"
   },
   "dependencies": {
-    "hono": "^4.0.0",
+    "hono": "^4.6.15",
     "@cloudflare/ai-chat": "^4.0.0",
     "workers-ai-provider": "^4.0.0",
-    "ai": "^4.0.0"
+    "ai": "^7.0.0"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.0.0",
-    "wrangler": "^4.0.0"
+    "@cloudflare/workers-types": "^4.20250801.0",
+    "wrangler": "^4.123.0"
   }
 }
