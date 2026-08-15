@@ -1,5 +1,5 @@
 // ============================================================
-// وكيل دعم عملاء - مع الأدوات الأساسية (Tools)
+// وكيل دعم عملاء - مع تحسينات السياق ومنع التذاكر المتعددة
 // ============================================================
 
 import { Hono } from 'hono';
@@ -172,9 +172,49 @@ app.get('/api/auth/me', async (c) => {
 });
 
 // ============================================================
-// 🎯 الأدوات (Tools) - إنشاء تذكرة
+// 🎯 الأدوات (Tools) المحسّنة
 // ============================================================
-async function createTicket(db: D1Database, userId: string, question: string): Promise<string> {
+
+// التحقق من وجود تذكرة مفتوحة للمستخدم
+async function hasOpenTicket(db: D1Database, userId: string): Promise<boolean> {
+    const result = await db.prepare(
+        'SELECT id FROM tickets WHERE user_id = ? AND status = "open" LIMIT 1'
+    ).bind(userId).first();
+    return !!result;
+}
+
+// إنشاء تذكرة جديدة (مع التحقق المسبق)
+async function createTicket(db: D1Database, userId: string, issue: string): Promise<string> {
+    // التحقق من وجود تذكرة مفتوحة
+    const openTicket = await db.prepare(
+        'SELECT id FROM tickets WHERE user_id = ? AND status = "open" LIMIT 1'
+    ).bind(userId).first();
+
+    if (openTicket) {
+        return `📋 لديك تذكرة مفتوحة بالفعل برقم ${(openTicket as any).id.slice(0, 8)}. فريق الدعم سيتواصل معك قريباً.`;
+    }
+
+    const ticketId = crypto.randomUUID();
+    const now = new Date().toISOString();
+    
+    await db.prepare(
+        `INSERT INTO tickets (id, user_id, issue, status, created_at) VALUES (?, ?, ?, ?, ?)`
+    ).bind(ticketId, userId, issue, 'open', now).run();
+    
+    return `✅ تم إنشاء تذكرة رقم ${ticketId.slice(0, 8)}. سيقوم فريق الدعم بالرد خلال ٢٤ ساعة.`;
+}
+
+// معالجة شكاوى تأخر الطلب
+async function handleDelayComplaint(db: D1Database, userId: string, question: string): Promise<string> {
+    // التحقق من وجود تذكرة مفتوحة
+    const openTicket = await db.prepare(
+        'SELECT id FROM tickets WHERE user_id = ? AND status = "open" LIMIT 1'
+    ).bind(userId).first();
+
+    if (openTicket) {
+        return `📋 لديك تذكرة مفتوحة بالفعل برقم ${(openTicket as any).id.slice(0, 8)}. فريق الدعم سيتواصل معك قريباً.`;
+    }
+
     const ticketId = crypto.randomUUID();
     const now = new Date().toISOString();
     
@@ -182,20 +222,11 @@ async function createTicket(db: D1Database, userId: string, question: string): P
         `INSERT INTO tickets (id, user_id, issue, status, created_at) VALUES (?, ?, ?, ?, ?)`
     ).bind(ticketId, userId, question, 'open', now).run();
     
-    return `✅ تم إنشاء تذكرة رقم ${ticketId.slice(0, 8)}. سيقوم فريق الدعم بالرد خلال ٢٤ ساعة.`;
+    return `✅ تم إنشاء تذكرة رقم ${ticketId.slice(0, 8)}. فريق الدعم سيتابع مشكلة تأخر الطلب وسيتواصل معك خلال ٢٤ ساعة.`;
 }
 
 // ============================================================
-// 🎯 الأدوات (Tools) - الاستعلام عن حالة الطلب
-// ============================================================
-async function getOrderStatus(db: D1Database, userId: string, orderNumber: string): Promise<string> {
-    // نفترض وجود جدول orders (يمكن إضافته لاحقاً)
-    // حالياً نرد برد افتراضي
-    return `📦 الطلب رقم ${orderNumber} قيد التوصيل. من المتوقع وصوله خلال ٣ أيام عمل.`;
-}
-
-// ============================================================
-// 🤖 نقطة /ask (مع الأدوات)
+// 🤖 نقطة /ask (مع تحسينات السياق)
 // ============================================================
 app.post('/api/ask', async (c) => {
     try {
@@ -232,10 +263,29 @@ app.post('/api/ask', async (c) => {
         }
 
         // ============================================================
-        // 1. التحقق من الأدوات (Tools)
+        // 1. التحقق من شكاوى تأخر الطلب
         // ============================================================
-        
-        // 1.1 إنشاء تذكرة
+        const delayKeywords = ['تأخر', 'لم يصل', 'مضى أكثر', 'تأخير', 'متأخر', 'ما زال'];
+        const isDelayComplaint = delayKeywords.some(k => question.includes(k)) && 
+                                 (question.includes('طلب') || question.includes('شحن') || question.includes('وصل'));
+
+        if (isDelayComplaint) {
+            const result = await handleDelayComplaint(db, userId, question);
+            await db.prepare(
+                `INSERT INTO conversations (id, user_id, message, response, created_at) VALUES (?, ?, ?, ?, ?)`
+            ).bind(
+                crypto.randomUUID(),
+                userId,
+                question,
+                result,
+                new Date().toISOString()
+            ).run();
+            return c.json({ answer: result });
+        }
+
+        // ============================================================
+        // 2. التحقق من طلب إنشاء تذكرة
+        // ============================================================
         if (question.includes('تذكرة') || question.includes('موظف') || question.includes('دعم بشري')) {
             const result = await createTicket(db, userId, question);
             await db.prepare(
@@ -250,25 +300,8 @@ app.post('/api/ask', async (c) => {
             return c.json({ answer: result });
         }
 
-        // 1.2 الاستعلام عن طلب
-        const orderMatch = question.match(/طلب\s*[#]?(\w+)/i);
-        if (orderMatch) {
-            const orderNumber = orderMatch[1];
-            const result = await getOrderStatus(db, userId, orderNumber);
-            await db.prepare(
-                `INSERT INTO conversations (id, user_id, message, response, created_at) VALUES (?, ?, ?, ?, ?)`
-            ).bind(
-                crypto.randomUUID(),
-                userId,
-                question,
-                result,
-                new Date().toISOString()
-            ).run();
-            return c.json({ answer: result });
-        }
-
         // ============================================================
-        // 2. البحث عن سياسة في جدول المعرفة (رد مباشر)
+        // 3. البحث عن سياسة في جدول المعرفة
         // ============================================================
         const words = question.split(' ').filter(w => w.length > 2);
         let knowledgeAnswer = '';
@@ -302,7 +335,7 @@ app.post('/api/ask', async (c) => {
         }
 
         // ============================================================
-        // 3. جلب آخر 5 محادثات للسياق (الذاكرة عبر D1)
+        // 4. جلب آخر 5 محادثات للسياق
         // ============================================================
         const { results: history } = await db.prepare(
             `SELECT message, response FROM conversations WHERE user_id = ? ORDER BY created_at DESC LIMIT 5`
@@ -318,7 +351,7 @@ app.post('/api/ask', async (c) => {
         }
 
         // ============================================================
-        // 4. بناء System Prompt (مع إضافة تحسين عدم التكرار)
+        // 5. System Prompt مع تعليمات السياق
         // ============================================================
         const systemPrompt = `أنت وكيل دعم فني محترف في شركة عالمية.
 
@@ -331,15 +364,15 @@ app.post('/api/ask', async (c) => {
 - أجب بالعربية الفصحى فقط وبإجابة مختصرة (جملتين كحد أقصى).
 - قدم إجابات متنوعة في الصياغة، وتجنب تكرار نفس الكلمات أو العبارات.
 - إذا كان السؤال يتعلق بسياسات الشركة (الشحن، الاسترجاع، الحساب)، استخدم المعلومات الرسمية.
+- إذا قال العميل أن الطلب تأخر أو لم يصل، اعتذر واطلب رقم الطلب للتحقق، أو اقترح إنشاء تذكرة.
 - إذا طلب العميل "تذكرة" أو "موظف بشري"، قم بإنشاء تذكرة له.
-- إذا أعطى رقم طلب، استعلم عن حالته.
 
 ${contextText ? `\n${contextText}\n` : ''}
 
 سؤال العميل: ${question}`;
 
         // ============================================================
-        // 5. استدعاء النموذج مع إعدادات منع التكرار
+        // 6. استدعاء النموذج
         // ============================================================
         let response;
         try {
@@ -365,7 +398,7 @@ ${contextText ? `\n${contextText}\n` : ''}
         }
 
         // ============================================================
-        // 6. استخراج الرد
+        // 7. استخراج الرد
         // ============================================================
         let answer = 
             response?.response ||
@@ -384,7 +417,7 @@ ${contextText ? `\n${contextText}\n` : ''}
         answer = answer.trim();
 
         // ============================================================
-        // 7. حفظ المحادثة في D1
+        // 8. حفظ المحادثة
         // ============================================================
         await db.prepare(
             `INSERT INTO conversations (id, user_id, message, response, created_at) VALUES (?, ?, ?, ?, ?)`
