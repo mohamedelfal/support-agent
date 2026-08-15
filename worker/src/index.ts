@@ -1,6 +1,5 @@
 // ============================================================
-// وكيل دعم عملاء - Support Agent Worker
-// مع Dynamic Routing ومعالجة دقيقة للاستجابة + قاعدة معرفة
+// وكيل دعم عملاء - Support Agent Worker (نسخة التشخيص)
 // ============================================================
 
 import { Hono } from 'hono';
@@ -71,7 +70,7 @@ app.get('/health/ready', async (c) => {
 });
 
 // ============================================================
-// Rate Limiting (نفس الكود الموجود)
+// Rate Limiting
 // ============================================================
 async function checkRateLimit(env: Env, email: string): Promise<{ allowed: boolean; remaining?: number; retryAfter?: number }> {
     const kv = env.RATE_LIMIT_KV;
@@ -106,7 +105,7 @@ async function checkRateLimit(env: Env, email: string): Promise<{ allowed: boole
 }
 
 // ============================================================
-// Authentication (نفس الكود الموجود)
+// Authentication
 // ============================================================
 app.post('/api/auth/login', async (c) => {
     try {
@@ -173,7 +172,7 @@ app.get('/api/auth/me', async (c) => {
 });
 
 // ============================================================
-// 🤖 الوكيل الذكي (تم تحويله إلى وكيل دعم عملاء)
+// 🤖 الوكيل الذكي (مع تشخيص الأخطاء)
 // ============================================================
 app.post('/api/ask', async (c) => {
     try {
@@ -210,7 +209,7 @@ app.post('/api/ask', async (c) => {
         }
 
         // ============================================================
-        // 1. جلب آخر 5 محادثات للسياق (نفس الكود)
+        // 1. جلب آخر 5 محادثات للسياق
         // ============================================================
         const { results: history } = await db.prepare(
             `SELECT message, response FROM conversations WHERE user_id = ? ORDER BY created_at DESC LIMIT 5`
@@ -223,7 +222,7 @@ app.post('/api/ask', async (c) => {
         }
 
         // ============================================================
-        // 2. 🔥 البحث في جدول المعرفة (الجديد)
+        // 2. البحث في جدول المعرفة
         // ============================================================
         const knowledgeResults = await db.prepare(
             `SELECT question, answer FROM knowledge WHERE keywords LIKE ? OR question LIKE ? LIMIT 3`
@@ -240,7 +239,7 @@ app.post('/api/ask', async (c) => {
         }
 
         // ============================================================
-        // 3. 🧠 بناء System Prompt الجديد (وكيل دعم)
+        // 3. بناء System Prompt
         // ============================================================
         let historyText = '';
         if (contextMessages.length > 0) {
@@ -267,29 +266,33 @@ ${knowledgeContext}
 الآن، سؤال العميل الحالي: ${question}`;
 
         // ============================================================
-        // 4. استدعاء Workers AI (نفس الطريقة مع dynamic و gateway)
+        // 4. استدعاء Workers AI (مع تشخيص دقيق)
         // ============================================================
-        const messages = [
-            { role: 'system', content: systemPrompt },
-            { role: 'user', content: question }
-        ];
-
-        const response = await c.env.AI.run(
-            'dynamic/support-agent',
-            {
-                messages,
-                temperature: 0.2,
-                max_tokens: 800,
-            },
-            {
-                gateway: {
-                    id: c.env.AI_GATEWAY_ID,
-                },
-            }
-        );
+        let response;
+        try {
+            // 🔥 بنحاول نستخدم النموذج المباشر الأول (الأسرع والأكثر استقراراً)
+            response = await c.env.AI.run(
+                '@cf/meta/llama-3-8b-instruct', // نموذج مباشر بدل dynamic عشان نختبر
+                {
+                    messages: [
+                        { role: 'system', content: systemPrompt },
+                        { role: 'user', content: question }
+                    ],
+                    temperature: 0.2,
+                    max_tokens: 800,
+                }
+            );
+        } catch (aiError) {
+            // لو فشل النموذج المباشر، نرجع الخطأ للمستخدم عشان نشخصه
+            const errorMsg = (aiError as Error).message || 'خطأ غير معروف';
+            console.error('❌ AI Error:', errorMsg);
+            return c.json({ 
+                answer: `⚠️ **خطأ في الذكاء الاصطناعي:** ${errorMsg}\n\nيرجى التأكد من تفعيل Workers AI في حسابك.` 
+            }, 200);
+        }
 
         // ============================================================
-        // 5. معالجة دقيقة للاستجابة (نفس الكود الموجود)
+        // 5. معالجة دقيقة للاستجابة
         // ============================================================
         console.log('🔍 AI Response:', JSON.stringify(response, null, 2));
 
@@ -305,9 +308,8 @@ ${knowledgeContext}
 
         if (!answer) {
             console.error('❌ No answer found in response:', JSON.stringify(response, null, 2));
-            // نرجع رد احتياطي بدلاً من خطأ 500 (لمنع فشل الواجهة)
             return c.json({ 
-                answer: '⚠️ عذراً، لم أستطع معالجة طلبك حالياً. برجاء كتابة "تذكرة" وسنقوم بالرد عليك خلال ٢٤ ساعة.' 
+                answer: '⚠️ عذراً، استقبلت رداً فارغاً من الذكاء الاصطناعي. حاول مرة أخرى.' 
             }, 200);
         }
 
@@ -327,15 +329,16 @@ ${knowledgeContext}
         return c.json({ answer });
     } catch (e) {
         console.error('❌ Ask error:', e);
-        // 🔥 منع الفشل: نرجع رد احتياطي مع status 200 عشان الواجهة متعطلش
+        // 🔥 هنا بنرجع سبب الخطأ الفعلي عشان نعرف المشكلة
+        const errorMessage = (e as Error).message || 'خطأ غير معروف';
         return c.json({ 
-            answer: '⚠️ النظام مشغول حالياً. من فضلك اكتب "تذكرة" وسنرد عليك خلال ٢٤ ساعة.' 
+            answer: `⚠️ **خطأ في النظام:** ${errorMessage}\n\nيرجى إرسال هذه الرسالة للمطور.` 
         }, 200);
     }
 });
 
 // ============================================================
-// 📜 جلب المحادثات السابقة (نفس الكود)
+// 📜 جلب المحادثات السابقة
 // ============================================================
 app.get('/api/conversations', async (c) => {
     try {
