@@ -1,5 +1,5 @@
 // ============================================================
-// وكيل دعم عملاء - مع تحسينات السياق ومنع التذاكر المتعددة
+// وكيل دعم عملاء - مع نظام تذاكر بطبقتين من التأكيد
 // ============================================================
 
 import { Hono } from 'hono';
@@ -172,28 +172,19 @@ app.get('/api/auth/me', async (c) => {
 });
 
 // ============================================================
-// 🎯 الأدوات (Tools) المحسّنة
+// 🎯 نظام التذاكر بطبقتين من التأكيد
 // ============================================================
 
-// التحقق من وجود تذكرة مفتوحة للمستخدم
-async function hasOpenTicket(db: D1Database, userId: string): Promise<boolean> {
+// التحقق من وجود تذكرة مفتوحة
+async function getOpenTicket(db: D1Database, userId: string): Promise<{ id: string; issue: string } | null> {
     const result = await db.prepare(
-        'SELECT id FROM tickets WHERE user_id = ? AND status = "open" LIMIT 1'
+        'SELECT id, issue FROM tickets WHERE user_id = ? AND status = "open" ORDER BY created_at DESC LIMIT 1'
     ).bind(userId).first();
-    return !!result;
+    return result ? { id: (result as any).id, issue: (result as any).issue } : null;
 }
 
-// إنشاء تذكرة جديدة (مع التحقق المسبق)
+// إنشاء تذكرة جديدة
 async function createTicket(db: D1Database, userId: string, issue: string): Promise<string> {
-    // التحقق من وجود تذكرة مفتوحة
-    const openTicket = await db.prepare(
-        'SELECT id FROM tickets WHERE user_id = ? AND status = "open" LIMIT 1'
-    ).bind(userId).first();
-
-    if (openTicket) {
-        return `📋 لديك تذكرة مفتوحة بالفعل برقم ${(openTicket as any).id.slice(0, 8)}. فريق الدعم سيتواصل معك قريباً.`;
-    }
-
     const ticketId = crypto.randomUUID();
     const now = new Date().toISOString();
     
@@ -201,32 +192,11 @@ async function createTicket(db: D1Database, userId: string, issue: string): Prom
         `INSERT INTO tickets (id, user_id, issue, status, created_at) VALUES (?, ?, ?, ?, ?)`
     ).bind(ticketId, userId, issue, 'open', now).run();
     
-    return `✅ تم إنشاء تذكرة رقم ${ticketId.slice(0, 8)}. سيقوم فريق الدعم بالرد خلال ٢٤ ساعة.`;
-}
-
-// معالجة شكاوى تأخر الطلب
-async function handleDelayComplaint(db: D1Database, userId: string, question: string): Promise<string> {
-    // التحقق من وجود تذكرة مفتوحة
-    const openTicket = await db.prepare(
-        'SELECT id FROM tickets WHERE user_id = ? AND status = "open" LIMIT 1'
-    ).bind(userId).first();
-
-    if (openTicket) {
-        return `📋 لديك تذكرة مفتوحة بالفعل برقم ${(openTicket as any).id.slice(0, 8)}. فريق الدعم سيتواصل معك قريباً.`;
-    }
-
-    const ticketId = crypto.randomUUID();
-    const now = new Date().toISOString();
-    
-    await db.prepare(
-        `INSERT INTO tickets (id, user_id, issue, status, created_at) VALUES (?, ?, ?, ?, ?)`
-    ).bind(ticketId, userId, question, 'open', now).run();
-    
-    return `✅ تم إنشاء تذكرة رقم ${ticketId.slice(0, 8)}. فريق الدعم سيتابع مشكلة تأخر الطلب وسيتواصل معك خلال ٢٤ ساعة.`;
+    return ticketId;
 }
 
 // ============================================================
-// 🤖 نقطة /ask (مع تحسينات السياق)
+// 🤖 نقطة /ask (مع طبقتين من التأكيد)
 // ============================================================
 app.post('/api/ask', async (c) => {
     try {
@@ -263,45 +233,7 @@ app.post('/api/ask', async (c) => {
         }
 
         // ============================================================
-        // 1. التحقق من شكاوى تأخر الطلب
-        // ============================================================
-        const delayKeywords = ['تأخر', 'لم يصل', 'مضى أكثر', 'تأخير', 'متأخر', 'ما زال'];
-        const isDelayComplaint = delayKeywords.some(k => question.includes(k)) && 
-                                 (question.includes('طلب') || question.includes('شحن') || question.includes('وصل'));
-
-        if (isDelayComplaint) {
-            const result = await handleDelayComplaint(db, userId, question);
-            await db.prepare(
-                `INSERT INTO conversations (id, user_id, message, response, created_at) VALUES (?, ?, ?, ?, ?)`
-            ).bind(
-                crypto.randomUUID(),
-                userId,
-                question,
-                result,
-                new Date().toISOString()
-            ).run();
-            return c.json({ answer: result });
-        }
-
-        // ============================================================
-        // 2. التحقق من طلب إنشاء تذكرة
-        // ============================================================
-        if (question.includes('تذكرة') || question.includes('موظف') || question.includes('دعم بشري')) {
-            const result = await createTicket(db, userId, question);
-            await db.prepare(
-                `INSERT INTO conversations (id, user_id, message, response, created_at) VALUES (?, ?, ?, ?, ?)`
-            ).bind(
-                crypto.randomUUID(),
-                userId,
-                question,
-                result,
-                new Date().toISOString()
-            ).run();
-            return c.json({ answer: result });
-        }
-
-        // ============================================================
-        // 3. البحث عن سياسة في جدول المعرفة
+        // 1. البحث عن سياسة في جدول المعرفة (رد مباشر)
         // ============================================================
         const words = question.split(' ').filter(w => w.length > 2);
         let knowledgeAnswer = '';
@@ -335,7 +267,135 @@ app.post('/api/ask', async (c) => {
         }
 
         // ============================================================
-        // 4. جلب آخر 5 محادثات للسياق
+        // 2. جلب آخر محادثة لتتبع الحالة
+        // ============================================================
+        const { results: lastHistory } = await db.prepare(
+            `SELECT response FROM conversations WHERE user_id = ? ORDER BY created_at DESC LIMIT 1`
+        ).bind(userId).all();
+
+        const lastResponse = lastHistory && lastHistory.length > 0 ? lastHistory[0].response : '';
+
+        // ============================================================
+        // 3. التحقق من الردود على أسئلة التأكيد
+        // ============================================================
+        const isYes = question.includes('نعم') || question.includes('Yes') || question.includes('yes') || question.includes('موافق');
+        const isNo = question.includes('لا') || question.includes('No') || question.includes('no') || question.includes('ليس');
+
+        // 3.1 إذا كان الرد السابق يسأل "هل ترغب في إنشاء تذكرة جديدة؟"
+        if (lastResponse.includes('هل ترغب في إنشاء تذكرة جديدة')) {
+            if (isYes) {
+                const ticketId = await createTicket(db, userId, question);
+                const response = `✅ تم إنشاء تذكرة جديدة برقم ${ticketId.slice(0, 8)}. سيقوم فريق الدعم بالرد خلال ٢٤ ساعة.`;
+                
+                await db.prepare(
+                    `INSERT INTO conversations (id, user_id, message, response, created_at) VALUES (?, ?, ?, ?, ?)`
+                ).bind(
+                    crypto.randomUUID(),
+                    userId,
+                    question,
+                    response,
+                    new Date().toISOString()
+                ).run();
+                return c.json({ answer: response });
+            } else if (isNo) {
+                const response = `👍 حسناً، سأحاول مساعدتك بدون إنشاء تذكرة جديدة. هل يمكنك توضيح مشكلتك أكثر؟`;
+                
+                await db.prepare(
+                    `INSERT INTO conversations (id, user_id, message, response, created_at) VALUES (?, ?, ?, ?, ?)`
+                ).bind(
+                    crypto.randomUUID(),
+                    userId,
+                    question,
+                    response,
+                    new Date().toISOString()
+                ).run();
+                return c.json({ answer: response });
+            }
+        }
+
+        // 3.2 إذا كان الرد السابق يسأل "هل ترغب في إنشاء تذكرة دعم؟"
+        if (lastResponse.includes('هل ترغب في إنشاء تذكرة دعم')) {
+            if (isYes) {
+                const ticketId = await createTicket(db, userId, question);
+                const response = `✅ تم إنشاء تذكرة رقم ${ticketId.slice(0, 8)}. سيقوم فريق الدعم بالرد خلال ٢٤ ساعة.`;
+                
+                await db.prepare(
+                    `INSERT INTO conversations (id, user_id, message, response, created_at) VALUES (?, ?, ?, ?, ?)`
+                ).bind(
+                    crypto.randomUUID(),
+                    userId,
+                    question,
+                    response,
+                    new Date().toISOString()
+                ).run();
+                return c.json({ answer: response });
+            } else if (isNo) {
+                const response = `👍 حسناً، سأحاول مساعدتك بدون إنشاء تذكرة. هل يمكنك توضيح مشكلتك أكثر؟`;
+                
+                await db.prepare(
+                    `INSERT INTO conversations (id, user_id, message, response, created_at) VALUES (?, ?, ?, ?, ?)`
+                ).bind(
+                    crypto.randomUUID(),
+                    userId,
+                    question,
+                    response,
+                    new Date().toISOString()
+                ).run();
+                return c.json({ answer: response });
+            }
+        }
+
+        // ============================================================
+        // 4. كشف المشكلات التي قد تحتاج تذكرة
+        // ============================================================
+        const complaintKeywords = ['تأخر', 'لم يصل', 'مضى', 'أسبوع', 'تذكرة', 'شكوى', 'مشكلة', 'خلل', 'عطل', 'لا يعمل', 'مساعدة', 'طلب'];
+        const isComplaint = complaintKeywords.some(k => question.includes(k));
+
+        // ============================================================
+        // 5. التحقق من وجود تذكرة مفتوحة
+        // ============================================================
+        const openTicket = await getOpenTicket(db, userId);
+
+        // ============================================================
+        // 5.1 إذا كانت شكوى ولدينا تذكرة مفتوحة
+        // ============================================================
+        if (isComplaint && openTicket) {
+            const response = `📋 لديك تذكرة مفتوحة بالفعل برقم ${openTicket.id.slice(0, 8)}.\n\n📌 هل ترغب في إنشاء تذكرة جديدة لهذه المشكلة؟ (أجب بـ "نعم" أو "لا")`;
+            
+            await db.prepare(
+                `INSERT INTO conversations (id, user_id, message, response, created_at) VALUES (?, ?, ?, ?, ?)`
+            ).bind(
+                crypto.randomUUID(),
+                userId,
+                question,
+                response,
+                new Date().toISOString()
+            ).run();
+            
+            return c.json({ answer: response });
+        }
+
+        // ============================================================
+        // 5.2 إذا كانت شكوى وليس لدينا تذكرة مفتوحة
+        // ============================================================
+        if (isComplaint && !openTicket) {
+            const response = `📌 يبدو أن لديك استفساراً أو شكوى. هل ترغب في إنشاء تذكرة دعم لهذه المشكلة؟ (أجب بـ "نعم" أو "لا")`;
+            
+            await db.prepare(
+                `INSERT INTO conversations (id, user_id, message, response, created_at) VALUES (?, ?, ?, ?, ?)`
+            ).bind(
+                crypto.randomUUID(),
+                userId,
+                question,
+                response,
+                new Date().toISOString()
+            ).run();
+            
+            return c.json({ answer: response });
+        }
+
+        // ============================================================
+        // 6. الأسئلة العامة
         // ============================================================
         const { results: history } = await db.prepare(
             `SELECT message, response FROM conversations WHERE user_id = ? ORDER BY created_at DESC LIMIT 5`
@@ -350,9 +410,6 @@ app.post('/api/ask', async (c) => {
             }
         }
 
-        // ============================================================
-        // 5. System Prompt مع تعليمات السياق
-        // ============================================================
         const systemPrompt = `أنت وكيل دعم فني محترف في شركة عالمية.
 
 **شخصيتك:**
@@ -364,16 +421,12 @@ app.post('/api/ask', async (c) => {
 - أجب بالعربية الفصحى فقط وبإجابة مختصرة (جملتين كحد أقصى).
 - قدم إجابات متنوعة في الصياغة، وتجنب تكرار نفس الكلمات أو العبارات.
 - إذا كان السؤال يتعلق بسياسات الشركة (الشحن، الاسترجاع، الحساب)، استخدم المعلومات الرسمية.
-- إذا قال العميل أن الطلب تأخر أو لم يصل، اعتذر واطلب رقم الطلب للتحقق، أو اقترح إنشاء تذكرة.
-- إذا طلب العميل "تذكرة" أو "موظف بشري"، قم بإنشاء تذكرة له.
+- لا تعطي روابط أو تعليمات غير حقيقية (مثل "انقر هنا" أو روابط وهمية).
 
 ${contextText ? `\n${contextText}\n` : ''}
 
 سؤال العميل: ${question}`;
 
-        // ============================================================
-        // 6. استدعاء النموذج
-        // ============================================================
         let response;
         try {
             response = await c.env.AI.run(
@@ -397,9 +450,6 @@ ${contextText ? `\n${contextText}\n` : ''}
             }, 200);
         }
 
-        // ============================================================
-        // 7. استخراج الرد
-        // ============================================================
         let answer = 
             response?.response ||
             response?.choices?.[0]?.message?.content ||
@@ -416,9 +466,6 @@ ${contextText ? `\n${contextText}\n` : ''}
 
         answer = answer.trim();
 
-        // ============================================================
-        // 8. حفظ المحادثة
-        // ============================================================
         await db.prepare(
             `INSERT INTO conversations (id, user_id, message, response, created_at) VALUES (?, ?, ?, ?, ?)`
         ).bind(
