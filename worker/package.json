@@ -8,6 +8,7 @@
   "dependencies": {
     "hono": "^4.6.15",
     "@cloudflare/ai-chat": "latest",
+    "agents": "latest",
     "workers-ai-provider": "latest",
     "ai": "^4.0.0",
     "zod": "^3.23.8"
