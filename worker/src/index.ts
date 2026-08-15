@@ -1,5 +1,6 @@
 // ============================================================
-// وكيل دعم عملاء - الإصدار المستقر النهائي (مع منع التكرار)
+// وكيل دعم عملاء - الإصدار الحاسم النهائي
+// (فصل المهام: ردود فورية + استدعاء نظيف)
 // ============================================================
 
 import { Hono } from 'hono';
@@ -172,7 +173,7 @@ app.get('/api/auth/me', async (c) => {
 });
 
 // ============================================================
-// 🤖 الوكيل الذكي - الإصدار المستقر النهائي
+// 🤖 الوكيل الذكي - الإصدار الحاسم
 // ============================================================
 app.post('/api/ask', async (c) => {
     try {
@@ -209,76 +210,75 @@ app.post('/api/ask', async (c) => {
         }
 
         // ============================================================
-        // 1. جلب آخر 5 محادثات (للسياق فقط)
+        // 1. البحث عن الكلمات المفتاحية للسياسات
         // ============================================================
-        const { results: history } = await db.prepare(
-            `SELECT message, response FROM conversations WHERE user_id = ? ORDER BY created_at DESC LIMIT 5`
-        ).bind(userId).all();
+        const policyKeywords = ['شحن', 'توصيل', 'استرجاع', 'مرتجع', 'كلمة السر', 'باسورد', 'حساب', 'دفع', 'كارت', 'تحويل'];
+        const isPolicyQuestion = policyKeywords.some(keyword => question.includes(keyword));
 
-        let contextText = '';
-        if (history && history.length > 0) {
-            const reversed = history.reverse();
-            contextText = 'المحادثات السابقة مع هذا العميل:\n';
-            for (const record of reversed) {
-                contextText += `- سؤال: ${record.message}\n- رد: ${record.response}\n`;
+        // ============================================================
+        // 2. إذا كان السؤال عن سياسة: نرد مباشرة من قاعدة المعرفة
+        // ============================================================
+        if (isPolicyQuestion) {
+            const words = question.split(' ').filter(w => w.length > 2);
+            let knowledgeAnswer = '';
+            let found = false;
+
+            for (const word of words) {
+                const knowledgeResults = await db.prepare(
+                    `SELECT answer FROM knowledge 
+                     WHERE question LIKE ? OR keywords LIKE ? 
+                     LIMIT 1`
+                ).bind(`%${word}%`, `%${word}%`).all();
+
+                if (knowledgeResults.results && knowledgeResults.results.length > 0) {
+                    knowledgeAnswer = knowledgeResults.results[0].answer;
+                    found = true;
+                    break;
+                }
+            }
+
+            if (found) {
+                // نرد مباشرة من قاعدة المعرفة (بدون استدعاء النموذج)
+                const answer = knowledgeAnswer;
+                
+                // حفظ المحادثة
+                await db.prepare(
+                    `INSERT INTO conversations (id, user_id, message, response, created_at) VALUES (?, ?, ?, ?, ?)`
+                ).bind(
+                    crypto.randomUUID(),
+                    userId,
+                    question,
+                    answer,
+                    new Date().toISOString()
+                ).run();
+
+                return c.json({ answer });
+            } else {
+                // إذا لم نجد إجابة، نطلب تذكرة (بدون استدعاء النموذج)
+                const answer = '⚠️ عذراً، لا توجد إجابة رسمية لهذا السؤال في قاعدة المعرفة. يرجى كتابة "تذكرة" وسيقوم فريق الدعم بالرد عليك خلال ٢٤ ساعة.';
+                
+                await db.prepare(
+                    `INSERT INTO conversations (id, user_id, message, response, created_at) VALUES (?, ?, ?, ?, ?)`
+                ).bind(
+                    crypto.randomUUID(),
+                    userId,
+                    question,
+                    answer,
+                    new Date().toISOString()
+                ).run();
+
+                return c.json({ answer });
             }
         }
 
         // ============================================================
-        // 2. البحث في المعرفة (إن وجدت)
+        // 3. للسؤال العام (خارج السياسات): نستدعي النموذج بسياق نظيف تماماً
         // ============================================================
-        const words = question.split(' ').filter(w => w.length > 2);
-        let knowledgeText = '';
-        let foundKnowledge = false;
+        const systemPrompt = `أنت مساعد مفيد. أجب على سؤال المستخدم بأسلوب واضح ومباشر.
+لا تكرر نفس الجملة أكثر من مرة.
+رد باللغة العربية الفصحى.
+سؤال المستخدم: ${question}`;
 
-        for (const word of words) {
-            const knowledgeResults = await db.prepare(
-                `SELECT question, answer FROM knowledge 
-                 WHERE question LIKE ? OR keywords LIKE ? 
-                 LIMIT 1`
-            ).bind(`%${word}%`, `%${word}%`).all();
-
-            if (knowledgeResults.results && knowledgeResults.results.length > 0) {
-                const k = knowledgeResults.results[0];
-                knowledgeText = `معلومة رسمية من سياسة الشركة:\nسؤال: ${k.question}\nجواب: ${k.answer}`;
-                foundKnowledge = true;
-                break;
-            }
-        }
-
-        // ============================================================
-        // 3. بناء System Prompt نظيف
-        // ============================================================
-        let systemPrompt = '';
-
-        if (foundKnowledge) {
-            systemPrompt = `أنت وكيل دعم عملاء محترف.
-
-لديك معلومة رسمية من سياسة الشركة يجب أن تستخدمها في ردك. يمكنك إعادة صياغتها بأسلوبك الخاص، مع الحفاظ على المعنى الدقيق.
-
-${knowledgeText}
-
-${contextText ? `\n${contextText}` : ''}
-
-تعليمات إضافية:
-- أجب على سؤال العميل الحالي باستخدام المعلومة الرسمية أعلاه.
-- لا تذكر عبارة "من سياسة الشركة" في ردك، بل ادمج المعلومة بشكل طبيعي.
-- إذا كان السؤال خارج نطاق المعلومة، يمكنك الإجابة من معرفتك العامة.`;
-        } else {
-            systemPrompt = `أنت وكيل دعم عملاء محترف.
-
-${contextText ? `\n${contextText}` : ''}
-
-تعليماتك:
-- أجب على سؤال العميل بأفضل ما لديك من معرفة.
-- إذا كان السؤال يتعلق بسياسات الشركة (مثل الشحن، الاسترجاع، الحساب) ولا تعرف الإجابة، اعتذر واطلب من العميل التواصل مع الدعم البشري.
-- بالنسبة للأسئلة العامة والتقنية، يمكنك الإجابة بحرية.
-- رد دائماً باللغة العربية الفصحى بأسلوب مهذب وواضح.`;
-        }
-
-        // ============================================================
-        // 4. استدعاء النموذج (مع إعدادات منع التكرار)
-        // ============================================================
         let response;
         try {
             response = await c.env.AI.run(
@@ -288,24 +288,21 @@ ${contextText ? `\n${contextText}` : ''}
                         { role: 'system', content: systemPrompt },
                         { role: 'user', content: question }
                     ],
-                    temperature: 0.6,          // ✅ القيمة الافتراضية (تم رفعها من 0.3)
-                    max_tokens: 800,
+                    temperature: 0.7,
+                    max_tokens: 500,
                     top_p: 0.9,
-                    repetition_penalty: 1.1,   // ✅ 🔥 يمنع تكرار النصوص (القطعة المفقودة)
-                    frequency_penalty: 0.5,    // ✅ 🔥 يقلل تكرار الكلمات والعبارات
+                    repetition_penalty: 1.2,
+                    frequency_penalty: 0.7,
                 }
             );
         } catch (aiError) {
             const errorMsg = (aiError as Error).message || 'خطأ غير معروف';
             console.error('❌ AI Error:', errorMsg);
             return c.json({ 
-                answer: `⚠️ عذراً، حدث خطأ في الذكاء الاصطناعي. يرجى المحاولة مرة أخرى.` 
+                answer: '⚠️ عذراً، حدث خطأ في الذكاء الاصطناعي. يرجى المحاولة مرة أخرى.' 
             }, 200);
         }
 
-        // ============================================================
-        // 5. استخراج الرد وتنظيفه
-        // ============================================================
         let answer = 
             response?.response ||
             response?.choices?.[0]?.message?.content ||
@@ -320,14 +317,12 @@ ${contextText ? `\n${contextText}` : ''}
             answer = '⚠️ عذراً، لم أستطع معالجة طلبك حالياً. حاول مرة أخرى.';
         }
 
-        // تنظيف الرد من أي بقايا تنسيقات
+        // تنظيف الرد
         answer = answer.replace(/\*\*الوكيل:\*\*/g, '').replace(/\*\*العميل:\*\*/g, '');
         answer = answer.replace(/الوكيل:/g, '').replace(/العميل:/g, '');
         answer = answer.trim();
 
-        // ============================================================
-        // 6. حفظ المحادثة
-        // ============================================================
+        // حفظ المحادثة
         await db.prepare(
             `INSERT INTO conversations (id, user_id, message, response, created_at) VALUES (?, ?, ?, ?, ?)`
         ).bind(
@@ -339,6 +334,7 @@ ${contextText ? `\n${contextText}` : ''}
         ).run();
 
         return c.json({ answer });
+
     } catch (e) {
         console.error('❌ Ask error:', e);
         return c.json({ 
