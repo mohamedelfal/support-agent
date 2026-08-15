@@ -1,5 +1,5 @@
 // ============================================================
-// وكيل دعم عملاء - مع أدوات (Tools) باستخدام AIChatAgent و runWithTools
+// وكيل دعم عملاء - مع أدوات (Tools) باستخدام AIChatAgent و streamText
 // الإصدار النهائي المتوافق مع أغسطس 2026
 // ============================================================
 
@@ -8,7 +8,6 @@ import { cors } from 'hono/cors';
 import { sign, verify } from 'hono/jwt';
 import { AIChatAgent } from '@cloudflare/ai-chat';
 import { createWorkersAI } from 'workers-ai-provider';
-import { runWithTools } from '@cloudflare/ai-utils';
 import { tool } from 'ai';
 import { z } from 'zod';
 
@@ -52,7 +51,7 @@ const updateProfileTool = tool({
 });
 
 // ============================================================
-// 2. وكيل AIChatAgent المخصص (مع runWithTools)
+// 2. وكيل AIChatAgent المخصص (مع streamText)
 // ============================================================
 
 export class SupportAgent extends AIChatAgent<Env> {
@@ -62,6 +61,8 @@ export class SupportAgent extends AIChatAgent<Env> {
     }
 
     async onChatMessage() {
+        const workersai = createWorkersAI({ binding: this.env.AI });
+
         const systemPrompt = `أنت وكيل دعم فني محترف في شركة عالمية.
 
 تعليماتك الأساسية:
@@ -71,22 +72,20 @@ export class SupportAgent extends AIChatAgent<Env> {
 - لا تكرر نفس الرد مرتين.
 - لا تعطِ روابط أو تعليمات غير حقيقية.`;
 
-        // استخدام runWithTools بدلاً من streamText
-        // هذه هي الطريقة الرسمية الموصى بها لاستدعاء الأدوات
-        const result = await runWithTools(
-            this.env.AI,
-            '@cf/meta/llama-3.2-3b-instruct',
-            {
-                messages: this.messages,
-                tools: [getOrderStatusTool, updateProfileTool],
-                system: systemPrompt,
-                temperature: 0.7,
-                max_tokens: 256,
-                top_p: 0.9,
-            }
-        );
+        // ✅ استخدام streamText مباشرة مع الأدوات
+        const result = await workersai.streamText({
+            model: '@cf/meta/llama-3.2-3b-instruct',
+            messages: this.messages,
+            system: systemPrompt,
+            tools: {
+                getOrderStatus: getOrderStatusTool,
+                updateProfile: updateProfileTool,
+            },
+            temperature: 0.7,
+            max_tokens: 256,
+            top_p: 0.9,
+        });
 
-        // تحويل النتيجة إلى تدفق UI
         return result.toUIMessageStreamResponse();
     }
 }
@@ -297,7 +296,7 @@ app.post('/api/ask', async (c) => {
         }
 
         // ============================================================
-        // استخدام AIChatAgent مع runWithTools للأسئلة العامة
+        // استخدام AIChatAgent مع streamText للأسئلة العامة
         // ============================================================
         const agent = new SupportAgent(c.env, userId);
 
