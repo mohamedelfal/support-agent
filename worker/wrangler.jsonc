@@ -2,11 +2,7 @@
   "name": "support-agent",
   "main": "src/index.ts",
   "compatibility_date": "2026-08-01",
-  "migrations": [
-    {
-      "new_sqlite_classes": true
-    }
-  ],
+  "new_sqlite_classes": true,
   "ai": {
     "binding": "AI"
   },
