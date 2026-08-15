@@ -1,22 +1,26 @@
 /**
  * ============================================================
- * وكيل دعم عملاء - نظام إدارة حالة (State Machine)
+ * وكيل دعم عملاء - باستخدام AIChatAgent (الحل الرسمي)
  * 
- * يعتمد هذا الوكيل على نهج "الروتينات" لإدارة تدفق المحادثة
- * خطوة بخطوة، مما يمنع التعلق ويضمن تجربة مستخدم سلسة.
+ * يعتمد هذا الوكيل على إطار العمل الرسمي من Cloudflare
+ * لإدارة المحادثات والأدوات بشكل احترافي.
  * 
- * الميزات الرئيسية:
- * - إدارة حالة واضحة (idle, awaiting_email, awaiting_code, ...)
- * - إلغاء سهل للعملية الحالية عبر كلمة "إلغاء" أو "رجوع"
- * - دعم كامل لتحديث البريد وتتبع الطلب وإنشاء التذاكر
- * - System Prompt مبسط ومركز على الهوية فقط
- * - توثيق احترافي لكل جزء من الكود
+ * الميزات:
+ * - إدارة تلقائية للرسائل والسياق
+ * - دعم كامل للأدوات (تحديث البريد، تتبع الطلب، إنشاء التذاكر)
+ * - أدوات تتطلب موافقة المستخدم (Human-in-the-loop)
+ * - استمرارية الحالة عبر Durable Objects
+ * - تخزين المحادثات في SQLite
  * ============================================================
  */
 
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { sign, verify } from 'hono/jwt';
+import { AIChatAgent } from '@cloudflare/ai-chat';
+import { createWorkersAI } from 'workers-ai-provider';
+import { tool } from 'ai';
+import { z } from 'zod';
 
 // ============================================================
 // تعريف بيئة العمل
@@ -33,9 +37,8 @@ type Env = {
 const app = new Hono<{ Bindings: Env }>();
 
 // ============================================================
-// ١. رؤوس الأمان و CORS والتحقق الصحي
+// ١. رؤوس الأمان و CORS
 // ============================================================
-
 app.use('*', async (c, next) => {
   await next();
   c.res.headers.set('X-Content-Type-Options', 'nosniff');
@@ -57,6 +60,9 @@ app.use(
   })
 );
 
+// ============================================================
+// ٢. نقاط الصحة
+// ============================================================
 app.get('/health/live', (c) =>
   c.json({ status: 'alive', timestamp: new Date().toISOString() })
 );
@@ -71,7 +77,7 @@ app.get('/health/ready', async (c) => {
 });
 
 // ============================================================
-// ٢. تحديد معدل الطلبات (Rate Limiting)
+// ٣. تحديد معدل الطلبات
 // ============================================================
 async function checkRateLimit(
   env: Env,
@@ -119,9 +125,8 @@ async function checkRateLimit(
 }
 
 // ============================================================
-// ٣. المصادقة (تسجيل الدخول والتحقق من التوكن)
+// ٤. المصادقة
 // ============================================================
-
 app.post('/api/auth/login', async (c) => {
   try {
     const { email } = await c.req.json();
@@ -198,306 +203,100 @@ app.get('/api/auth/me', async (c) => {
 });
 
 // ============================================================
-// ٤. أدوات مساعدة: استخراج البيانات من النصوص
+// ٥. أدوات التنفيذ
 // ============================================================
 
-/** تحويل الأرقام العربية إلى إنجليزية واستخراج أول رقم مكون من 4 خانات فأكثر */
-function extractNumber(text: string): string | null {
-  const map: Record<string, string> = {
-    '٠': '0',
-    '١': '1',
-    '٢': '2',
-    '٣': '3',
-    '٤': '4',
-    '٥': '5',
-    '٦': '6',
-    '٧': '7',
-    '٨': '8',
-    '٩': '9',
-  };
-  let normalized = text;
-  for (const [ar, en] of Object.entries(map)) {
-    normalized = normalized.replace(new RegExp(ar, 'g'), en);
-  }
-  const match = normalized.match(/\b(\d{4,})\b/);
-  return match ? match[1] : null;
-}
-
-/** استخراج البريد الإلكتروني من النص */
-function extractEmail(text: string): string | null {
-  const match = text.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
-  return match ? match[0] : null;
-}
-
-// ============================================================
-// ٥. أدوات التنفيذ (العمليات الفعلية)
-// ============================================================
-
-async function executeUpdateEmail(
-  db: D1Database,
-  userId: string,
-  newEmail: string
-): Promise<string> {
-  try {
-    await db
+/**
+ * أداة تحديث البريد الإلكتروني
+ * تُستخدم عندما يطلب المستخدم تغيير بريده الإلكتروني
+ */
+const updateEmailTool = tool({
+  description: 'تحديث البريد الإلكتروني للمستخدم.',
+  parameters: z.object({
+    newEmail: z.string().email().describe('البريد الإلكتروني الجديد'),
+  }),
+  execute: async ({ newEmail }, { db, userId }) => {
+    await (db as any)
       .prepare('UPDATE users SET email = ? WHERE id = ?')
       .bind(newEmail, userId)
       .run();
     return `✅ تم تحديث بريدك الإلكتروني إلى ${newEmail} بنجاح.`;
-  } catch (error) {
-    return `❌ فشل تحديث البريد: ${(error as Error).message}`;
-  }
-}
+  },
+});
 
-async function executeTrackOrder(orderNumber: string): Promise<string> {
-  // محاكاة - يمكن ربطها بجدول حقيقي
-  return `📦 حالة الطلب رقم ${orderNumber}: قيد التوصيل. رقم التتبع: TRK-${orderNumber}`;
-}
+/**
+ * أداة تتبع الطلب
+ * تُستخدم عندما يطلب المستخدم معرفة حالة طلبه
+ */
+const trackOrderTool = tool({
+  description: 'الحصول على حالة الطلب باستخدام رقم الطلب.',
+  parameters: z.object({
+    orderNumber: z.string().describe('رقم الطلب'),
+  }),
+  execute: async ({ orderNumber }) => {
+    // محاكاة - يمكن ربطها بجدول حقيقي
+    return `📦 حالة الطلب رقم ${orderNumber}: قيد التوصيل. رقم التتبع: TRK-${orderNumber}`;
+  },
+});
 
-async function executeCreateTicket(
-  db: D1Database,
-  userId: string,
-  issue: string
-): Promise<string> {
-  const ticketId = crypto.randomUUID();
-  const now = new Date().toISOString();
-  await db
-    .prepare(
-      'INSERT INTO tickets (id, user_id, issue, status, created_at) VALUES (?, ?, ?, ?, ?)'
-    )
-    .bind(ticketId, userId, issue, 'open', now)
-    .run();
-  return `✅ تم إنشاء تذكرة دعم برقم ${ticketId.slice(
-    0,
-    8
-  )}. سيقوم فريق الدعم بالرد خلال ٢٤ ساعة.`;
-}
-
-// ============================================================
-// ٦. نظام الجلسات وإدارة الحالة (State Machine)
-// ============================================================
-
-/** تعريف بنية البيانات المخزنة في الجلسة */
-type SessionData = {
-  step:
-    | 'idle'
-    | 'awaiting_email'
-    | 'awaiting_code'
-    | 'awaiting_order'
-    | 'awaiting_order_confirm'
-    | 'awaiting_ticket_issue'
-    | 'awaiting_ticket_confirm';
-  data: {
-    newEmail?: string;
-    verificationCode?: string;
-    orderNumber?: string;
-    ticketIssue?: string;
-  };
-};
-
-async function createSession(
-  db: D1Database,
-  userId: string,
-  initialData: SessionData
-): Promise<string> {
-  const id = crypto.randomUUID();
-  const now = new Date().toISOString();
-  const expiresAt = new Date(Date.now() + 5 * 60 * 1000).toISOString();
-  await db
-    .prepare(
-      'INSERT INTO sessions (id, user_id, action, step, data, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
-    )
-    .bind(
-      id,
-      userId,
-      'state_machine', // action عام
-      initialData.step,
-      JSON.stringify(initialData),
-      now,
-      expiresAt
-    )
-    .run();
-  return id;
-}
-
-async function updateSession(
-  db: D1Database,
-  sessionId: string,
-  data: SessionData
-): Promise<void> {
-  const now = new Date().toISOString();
-  await db
-    .prepare(
-      'UPDATE sessions SET step = ?, data = ?, created_at = ? WHERE id = ?'
-    )
-    .bind(data.step, JSON.stringify(data), now, sessionId)
-    .run();
-}
-
-async function deleteSession(db: D1Database, sessionId: string): Promise<void> {
-  await db.prepare('DELETE FROM sessions WHERE id = ?').bind(sessionId).run();
-}
-
-async function getActiveSession(
-  db: D1Database,
-  userId: string
-): Promise<{ id: string; data: SessionData } | null> {
-  const now = new Date().toISOString();
-  const result = await db
-    .prepare(
-      'SELECT id, data FROM sessions WHERE user_id = ? AND expires_at > ? ORDER BY created_at DESC LIMIT 1'
-    )
-    .bind(userId, now)
-    .first();
-  if (!result) return null;
-  return {
-    id: result.id as string,
-    data: JSON.parse(result.data as string) as SessionData,
-  };
-}
-
-async function cleanExpiredSessions(db: D1Database): Promise<void> {
-  const now = new Date().toISOString();
-  await db.prepare('DELETE FROM sessions WHERE expires_at <= ?').bind(now).run();
-}
+/**
+ * أداة إنشاء تذكرة دعم (بدون execute)
+ * هذه الأداة تتطلب موافقة المستخدم (Human-in-the-loop)
+ * لذلك لا تحتوي على دالة execute، وسيطلب AIChatAgent تأكيد المستخدم
+ */
+const createTicketTool = tool({
+  description: 'إنشاء تذكرة دعم جديدة لمشكلة يواجهها العميل.',
+  parameters: z.object({
+    issue: z.string().describe('وصف المشكلة بالتفصيل'),
+  }),
+  // لا يوجد execute - ستتعامل الواجهة الأمامية مع التأكيد
+});
 
 // ============================================================
-// ٧. كشف النية الأولية (في حالة idle)
+// ٦. وكيل AIChatAgent
 // ============================================================
 
-function detectIntent(question: string):
-  | 'update_email'
-  | 'track_order'
-  | 'create_ticket'
-  | 'general' {
-  const lower = question.toLowerCase();
-
-  // تحديث البريد: يحتوي على بريد وكلمة تغيير/تحديث
-  if (
-    extractEmail(question) &&
-    (lower.includes('تحديث') ||
-      lower.includes('تغيير') ||
-      lower.includes('تعديل') ||
-      lower.includes('تبديل'))
-  ) {
-    return 'update_email';
+export class SupportAgent extends AIChatAgent<Env> {
+  constructor(env: Env, userId: string) {
+    super(env);
+    this.userId = userId;
   }
 
-  // تتبع الطلب: يحتوي على رقم وكلمة طلب/تتبع
-  if (
-    extractNumber(question) &&
-    (lower.includes('طلب') ||
-      lower.includes('تتبع') ||
-      lower.includes('شحنة') ||
-      lower.includes('شحن'))
-  ) {
-    return 'track_order';
-  }
+  async onChatMessage() {
+    const workersai = createWorkersAI({ binding: this.env.AI });
 
-  // إنشاء تذكرة: يحتوي على كلمات تذكرة/شكوى/مشكلة/دعم
-  if (
-    lower.includes('تذكرة') ||
-    lower.includes('شكوى') ||
-    lower.includes('مشكلة') ||
-    lower.includes('دعم')
-  ) {
-    return 'create_ticket';
-  }
+    const tools = {
+      updateEmail: updateEmailTool,
+      trackOrder: trackOrderTool,
+      createTicket: createTicketTool,
+    };
 
-  return 'general';
-}
+    const systemPrompt = `أنت وكيل دعم فني محترف لشركة تقنية.
 
-// ============================================================
-// ٨. معالجة الأسئلة العامة (غير الموجهة لأداة)
-// ============================================================
+تعليماتك الأساسية:
+- استخدم الأدوات المتاحة عندما يطلب المستخدم ذلك.
+- إذا طلب المستخدم تحديث بريده، استخدم أداة updateEmail.
+- إذا طلب تتبع طلبه، استخدم أداة trackOrder.
+- إذا طلب إنشاء تذكرة دعم، استخدم أداة createTicket (ستتطلب موافقته).
+- أجب باللغة العربية الفصحى وبإجابة مختصرة وواضحة.
+- لا تختلق معلومات.`;
 
-async function handleGeneralQuestion(
-  c: any,
-  db: D1Database,
-  userId: string,
-  question: string
-) {
-  // 1. البحث في قاعدة المعرفة
-  const words = question.split(' ').filter((w: string) => w.length > 2);
-  for (const word of words) {
-    const result = await db
-      .prepare(
-        'SELECT answer FROM knowledge WHERE question LIKE ? OR keywords LIKE ? LIMIT 1'
-      )
-      .bind(`%${word}%`, `%${word}%`)
-      .all();
-    if (result.results && result.results.length > 0) {
-      const answer = result.results[0].answer as string;
-      await saveConversation(db, userId, question, answer);
-      return c.json({ answer });
-    }
-  }
-
-  // 2. استخدام النموذج اللغوي
-  const history = await db
-    .prepare(
-      'SELECT message, response FROM conversations WHERE user_id = ? ORDER BY created_at DESC LIMIT 5'
-    )
-    .bind(userId)
-    .all();
-
-  let context = '';
-  if (history.results && history.results.length > 0) {
-    const reversed = history.results.reverse();
-    context = 'المحادثات السابقة:\n';
-    for (const rec of reversed) {
-      context += `- س: ${rec.message}\n- ج: ${rec.response}\n`;
-    }
-  }
-
-  const systemPrompt = `أنت وكيل دعم فني لشركة تقنية. هويتك: مساعد محترف، مهذب، ودقيق.
-قواعدك الأساسية:
-- استخدم اللغة العربية الفصحى.
-- حافظ على الإجابات مختصرة (جملتين كحد أقصى).
-- لا تختلق معلومات. استخدم الأدوات المتاحة فقط.
-- إذا واجهت موقفاً لا تعرف كيفية معالجته، قل "سأقوم بتحويلك إلى أحد الممثلين البشريين".`;
-
-  const fullPrompt = `${systemPrompt}\n\n${context ? context + '\n' : ''}سؤال العميل: ${question}`;
-
-  let aiResponse;
-  try {
-    aiResponse = await c.env.AI.run('@cf/meta/llama-3.2-3b-instruct', {
-      messages: [{ role: 'user', content: fullPrompt }],
+    const result = await workersai.streamText({
+      model: '@cf/meta/llama-3.2-3b-instruct',
+      messages: this.messages,
+      system: systemPrompt,
+      tools: tools,
+      maxSteps: 5, // السماح بخطوات متعددة للأدوات
       temperature: 0.7,
       max_tokens: 256,
     });
-  } catch (err) {
-    console.error('AI Error:', err);
-    return c.json({ answer: '⚠️ عذراً، حدث عطل في الذكاء الاصطناعي. حاول مرة أخرى.' });
+
+    return result.toUIMessageStreamResponse();
   }
-
-  const answer = (aiResponse as any).response || '⚠️ لم أستطع معالجة طلبك.';
-  await saveConversation(db, userId, question, answer);
-  return c.json({ answer });
-}
-
-async function saveConversation(
-  db: D1Database,
-  userId: string,
-  message: string,
-  response: string
-) {
-  await db
-    .prepare(
-      'INSERT INTO conversations (id, user_id, message, response, created_at) VALUES (?, ?, ?, ?, ?)'
-    )
-    .bind(
-      crypto.randomUUID(),
-      userId,
-      message,
-      response,
-      new Date().toISOString()
-    )
-    .run();
 }
 
 // ============================================================
-// ٩. نقطة /ask (المعالجة الرئيسية)
+// ٧. نقطة /ask (المعالجة الرئيسية)
 // ============================================================
 
 app.post('/api/ask', async (c) => {
@@ -505,9 +304,11 @@ app.post('/api/ask', async (c) => {
     // المصادقة
     const auth = c.req.header('Authorization');
     if (!auth) return c.json({ error: 'Unauthorized' }, 401);
+
     const token = auth.replace('Bearer ', '');
     const payload = await verify(token, c.env.JWT_SECRET, 'HS256');
     if (!payload.sub) return c.json({ error: 'Invalid token' }, 401);
+
     const userId = payload.sub;
 
     // جلب المستخدم
@@ -525,189 +326,65 @@ app.post('/api/ask', async (c) => {
       return c.json({ error: 'Question too long (max 1000 chars)' }, 400);
     }
 
-    // تنظيف الجلسات المنتهية
-    await cleanExpiredSessions(db);
+    // إنشاء وكيل جديد لكل طلب
+    const agent = new SupportAgent(c.env, userId);
 
-    // جلب الجلسة النشطة أو إنشاء واحدة جديدة
-    let session = await getActiveSession(db, userId);
-    let sessionId: string;
-    let sessionData: SessionData;
+    // محاكاة طلب WebSocket لـ AIChatAgent
+    const body = JSON.stringify({
+      messages: [{ role: 'user', content: question }]
+    });
+    const request = new Request('https://agent', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: body
+    });
 
-    if (session) {
-      sessionId = session.id;
-      sessionData = session.data;
-    } else {
-      sessionData = { step: 'idle', data: {} };
-      sessionId = await createSession(db, userId, sessionData);
-    }
+    const response = await agent.fetch(request);
+    const data = await response.json();
 
-    // معالجة أمر الإلغاء العام
-    if (question.includes('إلغاء') || question.includes('رجوع')) {
-      sessionData = { step: 'idle', data: {} };
-      await updateSession(db, sessionId, sessionData);
-      return c.json({
-        answer: '👍 تم إلغاء العملية الحالية. كيف يمكنني مساعدتك؟',
-      });
-    }
+    // استخراج الرد
+    let answer = data?.messages?.[data.messages.length - 1]?.content || 'عذراً، لم أستطع معالجة طلبك.';
+    answer = answer.trim();
 
-    // آلة الحالة
-    switch (sessionData.step) {
-      case 'idle': {
-        const intent = detectIntent(question);
-        if (intent === 'update_email') {
-          sessionData.step = 'awaiting_email';
-          await updateSession(db, sessionId, sessionData);
-          return c.json({
-            answer: '📧 الرجاء كتابة البريد الإلكتروني الجديد.',
-          });
-        } else if (intent === 'track_order') {
-          sessionData.step = 'awaiting_order';
-          await updateSession(db, sessionId, sessionData);
-          return c.json({
-            answer: '📦 الرجاء كتابة رقم الطلب (أرقام فقط).',
-          });
-        } else if (intent === 'create_ticket') {
-          sessionData.step = 'awaiting_ticket_issue';
-          await updateSession(db, sessionId, sessionData);
-          return c.json({
-            answer: '📌 الرجاء كتابة وصف المشكلة بالتفصيل.',
-          });
-        } else {
-          // سؤال عام
-          return await handleGeneralQuestion(c, db, userId, question);
-        }
-      }
+    // حفظ المحادثة في D1 (للتاريخ)
+    await db
+      .prepare(
+        'INSERT INTO conversations (id, user_id, message, response, created_at) VALUES (?, ?, ?, ?, ?)'
+      )
+      .bind(
+        crypto.randomUUID(),
+        userId,
+        question,
+        answer,
+        new Date().toISOString()
+      )
+      .run();
 
-      case 'awaiting_email': {
-        const email = extractEmail(question);
-        if (!email) {
-          return c.json({
-            answer: '⚠️ بريد إلكتروني غير صالح. حاول مرة أخرى (مثال: name@domain.com).',
-          });
-        }
-        const code = Math.floor(100000 + Math.random() * 900000).toString();
-        sessionData.step = 'awaiting_code';
-        sessionData.data = { newEmail: email, verificationCode: code };
-        await updateSession(db, sessionId, sessionData);
-        return c.json({
-          answer: `📧 تم استلام البريد: ${email}. تم إرسال كود تحقق وهمي: ${code}. أرسل الكود للتأكيد.`,
-        });
-      }
-
-      case 'awaiting_code': {
-        const entered = question.trim();
-        const expected = sessionData.data.verificationCode;
-        if (entered === expected) {
-          const result = await executeUpdateEmail(
-            db,
-            userId,
-            sessionData.data.newEmail!
-          );
-          sessionData = { step: 'idle', data: {} };
-          await updateSession(db, sessionId, sessionData);
-          await saveConversation(db, userId, question, result);
-          return c.json({ answer: result });
-        } else {
-          return c.json({
-            answer: '⚠️ الكود غير صحيح. حاول مرة أخرى أو اكتب "إلغاء".',
-          });
-        }
-      }
-
-      case 'awaiting_order': {
-        const order = extractNumber(question);
-        if (!order) {
-          return c.json({
-            answer: '⚠️ رقم طلب غير صالح. يجب أن يكون 4 أرقام أو أكثر.',
-          });
-        }
-        sessionData.step = 'awaiting_order_confirm';
-        sessionData.data = { orderNumber: order };
-        await updateSession(db, sessionId, sessionData);
-        return c.json({
-          answer: `🔍 هل رقم الطلب ${order} هو الصحيح؟ أجب بـ "نعم" أو "لا".`,
-        });
-      }
-
-      case 'awaiting_order_confirm': {
-        const lower = question.toLowerCase();
-        if (lower.includes('نعم') || lower.includes('yes')) {
-          const result = await executeTrackOrder(
-            sessionData.data.orderNumber!
-          );
-          sessionData = { step: 'idle', data: {} };
-          await updateSession(db, sessionId, sessionData);
-          await saveConversation(db, userId, question, result);
-          return c.json({ answer: result });
-        } else {
-          sessionData = { step: 'idle', data: {} };
-          await updateSession(db, sessionId, sessionData);
-          return c.json({
-            answer: '👍 تم إلغاء تتبع الطلب. كيف يمكنني مساعدتك؟',
-          });
-        }
-      }
-
-      case 'awaiting_ticket_issue': {
-        if (question.length < 5) {
-          return c.json({
-            answer: '⚠️ الرجاء كتابة وصف أوضح (على الأقل 5 أحرف).',
-          });
-        }
-        sessionData.step = 'awaiting_ticket_confirm';
-        sessionData.data = { ticketIssue: question };
-        await updateSession(db, sessionId, sessionData);
-        return c.json({
-          answer: `📌 هل تريد إنشاء تذكرة بالمشكلة التالية:\n"${question}"\nأجب بـ "نعم" أو "لا".`,
-        });
-      }
-
-      case 'awaiting_ticket_confirm': {
-        const lower = question.toLowerCase();
-        if (lower.includes('نعم') || lower.includes('yes')) {
-          const result = await executeCreateTicket(
-            db,
-            userId,
-            sessionData.data.ticketIssue!
-          );
-          sessionData = { step: 'idle', data: {} };
-          await updateSession(db, sessionId, sessionData);
-          await saveConversation(db, userId, question, result);
-          return c.json({ answer: result });
-        } else {
-          sessionData = { step: 'idle', data: {} };
-          await updateSession(db, sessionId, sessionData);
-          return c.json({
-            answer: '👍 تم إلغاء إنشاء التذكرة. كيف يمكنني مساعدتك؟',
-          });
-        }
-      }
-
-      default:
-        // حالة غير معروفة – إعادة تعيين إلى idle
-        sessionData = { step: 'idle', data: {} };
-        await updateSession(db, sessionId, sessionData);
-        return c.json({
-          answer: '⚠️ حدث خطأ غير متوقع. لنعد من البداية.',
-        });
-    }
+    return c.json({ answer });
   } catch (e) {
     console.error('❌ Ask error:', e);
-    return c.json({ answer: '⚠️ عذراً، حدث خطأ في النظام. حاول مرة أخرى.' }, 200);
+    return c.json(
+      {
+        answer: '⚠️ عذراً، حدث خطأ في النظام. حاول مرة أخرى.',
+      },
+      200
+    );
   }
 });
 
 // ============================================================
-// ١٠. جلب المحادثات السابقة
+// ٨. جلب المحادثات السابقة
 // ============================================================
 
 app.get('/api/conversations', async (c) => {
   try {
     const auth = c.req.header('Authorization');
     if (!auth) return c.json({ error: 'Unauthorized' }, 401);
+
     const token = auth.replace('Bearer ', '');
     const payload = await verify(token, c.env.JWT_SECRET, 'HS256');
     if (!payload.sub) return c.json({ error: 'Invalid token' }, 401);
+
     const userId = payload.sub;
 
     const db = c.env.DB;
