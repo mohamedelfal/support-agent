@@ -6,7 +6,11 @@
     "deploy": "wrangler deploy"
   },
   "dependencies": {
-    "hono": "^4.6.15"
+    "hono": "^4.6.15",
+    "@cloudflare/ai-chat": "latest",
+    "workers-ai-provider": "latest",
+    "ai": "^4.0.0",
+    "zod": "^3.23.8"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260815.1",
