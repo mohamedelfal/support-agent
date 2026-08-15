@@ -10,7 +10,9 @@
     "@cloudflare/ai-chat": "latest",
     "workers-ai-provider": "^4.0.0",
     "ai": "^4.0.0",
-    "agents": "latest"
+    "agents": "latest",
+    "zod": "^4.0.0",
+    "@modelcontextprotocol/client": "^2.0.0"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20250801.0",
