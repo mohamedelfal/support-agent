@@ -19,7 +19,7 @@ import { cors } from 'hono/cors';
 import { sign, verify } from 'hono/jwt';
 import { AIChatAgent } from '@cloudflare/ai-chat';
 import { createWorkersAI } from 'workers-ai-provider';
-import { tool } from 'ai';
+import { streamText, convertToModelMessages, tool } from 'ai';
 import { z } from 'zod';
 
 // ============================================================
@@ -278,9 +278,9 @@ export class SupportAgent extends AIChatAgent<Env> {
 - أجب باللغة العربية الفصحى وبإجابة مختصرة وواضحة.
 - لا تختلق معلومات.`;
 
-    const result = await workersai.streamText({
-      model: '@cf/meta/llama-3.2-3b-instruct',
-      messages: this.messages,
+    const result = streamText({
+      model: workersai('@cf/meta/llama-3.2-3b-instruct'),
+      messages: await convertToModelMessages(this.messages),
       system: systemPrompt,
       tools: tools,
       maxSteps: 5,
