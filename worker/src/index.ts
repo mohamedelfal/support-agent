@@ -176,7 +176,7 @@ app.get('/api/auth/me', async (c) => {
 // 🎯 الأدوات (الكشف المباشر)
 // ============================================================
 
-// أداة تحديث البريد الإلكتروني (كشف مباشر)
+// أداة تحديث البريد الإلكتروني
 async function updateProfile(db: D1Database, userId: string, newEmail: string): Promise<string> {
     try {
         await db.prepare(
@@ -190,12 +190,11 @@ async function updateProfile(db: D1Database, userId: string, newEmail: string): 
 
 // أداة الاستعلام عن حالة الطلب (محاكاة)
 async function getOrderStatus(orderNumber: string): Promise<string> {
-    // محاكاة الاستعلام عن الطلب
     return `📦 حالة الطلب رقم ${orderNumber}: قيد التوصيل. رقم التتبع: TRK-${orderNumber}`;
 }
 
 // ============================================================
-// 🤖 نقطة /ask (إدارة المحادثة يدوياً)
+// 🤖 نقطة /ask
 // ============================================================
 
 app.post('/api/ask', async (c) => {
@@ -238,17 +237,16 @@ app.post('/api/ask', async (c) => {
 
         // 1.1 تحديث البريد الإلكتروني
         const emailMatch = question.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
-        const isUpdateProfile = question.includes('تحديث بريدي') || 
-                                question.includes('غير إيميل') || 
-                                question.includes('تغيير الإيميل') || 
-                                question.includes('تغيير البريد') ||
-                                question.includes('ايميل جديد');
+        const isUpdateProfile = question.includes('تحديث بريدي') ||
+            question.includes('غير إيميل') ||
+            question.includes('تغيير الإيميل') ||
+            question.includes('تغيير البريد') ||
+            question.includes('ايميل جديد');
 
         if (emailMatch && isUpdateProfile) {
             const newEmail = emailMatch[0];
             const result = await updateProfile(db, userId, newEmail);
-            
-            // حفظ المحادثة
+
             await db.prepare(
                 `INSERT INTO conversations (id, user_id, message, response, created_at) VALUES (?, ?, ?, ?, ?)`
             ).bind(
@@ -263,15 +261,15 @@ app.post('/api/ask', async (c) => {
 
         // 1.2 الاستعلام عن حالة الطلب
         const orderMatch = question.match(/\b(\d{4,})\b/);
-        const isOrderQuery = question.includes('حالة طلبي') || 
-                            question.includes('الطلب') || 
-                            question.includes('شحنتي') || 
-                            question.includes('تتبع');
+        const isOrderQuery = question.includes('حالة طلبي') ||
+            question.includes('الطلب') ||
+            question.includes('شحنتي') ||
+            question.includes('تتبع');
 
         if (orderMatch && isOrderQuery) {
             const orderNumber = orderMatch[1];
             const result = await getOrderStatus(orderNumber);
-            
+
             await db.prepare(
                 `INSERT INTO conversations (id, user_id, message, response, created_at) VALUES (?, ?, ?, ?, ?)`
             ).bind(
@@ -347,7 +345,6 @@ ${contextText ? `\n${contextText}\n` : ''}
 
 سؤال العميل: ${question}`;
 
-        // استدعاء النموذج باستخدام AI.run
         let aiResponse;
         try {
             aiResponse = await c.env.AI.run(
@@ -368,11 +365,9 @@ ${contextText ? `\n${contextText}\n` : ''}
             }, 200);
         }
 
-        // استخراج الرد
         let answer = (aiResponse as any).response || '⚠️ عذراً، لم أستطع معالجة طلبك.';
         answer = answer.trim();
 
-        // حفظ المحادثة
         await db.prepare(
             `INSERT INTO conversations (id, user_id, message, response, created_at) VALUES (?, ?, ?, ?, ?)`
         ).bind(
