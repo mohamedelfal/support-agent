@@ -1,6 +1,7 @@
 // ============================================================
 // وكيل دعم عملاء - النهج المستقر (بدون AIChatAgent)
 // إدارة المحادثة عبر D1 + كشف مباشر للأدوات
+// تم التحسين: دعم الأرقام العربية والإنجليزية، تحسين الكشف عن الأدوات
 // ============================================================
 
 import { Hono } from 'hono';
@@ -173,8 +174,37 @@ app.get('/api/auth/me', async (c) => {
 });
 
 // ============================================================
-// 🎯 الأدوات (الكشف المباشر)
+// 🎯 الأدوات (الكشف المباشر المحسّن)
 // ============================================================
+
+/**
+ * استخراج الأرقام من النصوص (تدعم العربية والإنجليزية)
+ * مثال: "١٢٣٤" → "1234"، "1234" → "1234"
+ */
+function extractNumber(text: string): string | null {
+    // تحويل الأرقام العربية إلى إنجليزية
+    const arabicToEnglish: { [key: string]: string } = {
+        '٠': '0', '١': '1', '٢': '2', '٣': '3', '٤': '4',
+        '٥': '5', '٦': '6', '٧': '7', '٨': '8', '٩': '9'
+    };
+    
+    let normalized = text;
+    for (const [arabic, english] of Object.entries(arabicToEnglish)) {
+        normalized = normalized.replace(new RegExp(arabic, 'g'), english);
+    }
+    
+    // البحث عن رقم (4 أرقام فأكثر) - يدعم الأرقام المفصولة بفواصل أو مسافات
+    const match = normalized.match(/\b(\d{4,})\b/);
+    return match ? match[1] : null;
+}
+
+/**
+ * استخراج البريد الإلكتروني من النص
+ */
+function extractEmail(text: string): string | null {
+    const match = text.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
+    return match ? match[0] : null;
+}
 
 // أداة تحديث البريد الإلكتروني
 async function updateProfile(db: D1Database, userId: string, newEmail: string): Promise<string> {
@@ -194,7 +224,7 @@ async function getOrderStatus(orderNumber: string): Promise<string> {
 }
 
 // ============================================================
-// 🤖 نقطة /ask
+// 🤖 نقطة /ask (مع تحسين الكشف)
 // ============================================================
 
 app.post('/api/ask', async (c) => {
@@ -232,21 +262,19 @@ app.post('/api/ask', async (c) => {
         }
 
         // ============================================================
-        // 1. الكشف المباشر عن الأدوات
+        // 1. الكشف المباشر عن الأدوات (محسّن)
         // ============================================================
 
         // 1.1 تحديث البريد الإلكتروني
-        const emailMatch = question.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
-        const isUpdateProfile = question.includes('تحديث بريدي') ||
-            question.includes('غير إيميل') ||
-            question.includes('تغيير الإيميل') ||
-            question.includes('تغيير البريد') ||
-            question.includes('ايميل جديد');
+        const email = extractEmail(question);
+        const isUpdateProfile = 
+            question.includes('تحديث') && 
+            (question.includes('بريد') || question.includes('إيميل') || 
+             question.includes('ايميل') || question.includes('email') ||
+             question.includes('الإيميل') || question.includes('الايميل'));
 
-        if (emailMatch && isUpdateProfile) {
-            const newEmail = emailMatch[0];
-            const result = await updateProfile(db, userId, newEmail);
-
+        if (email && isUpdateProfile) {
+            const result = await updateProfile(db, userId, email);
             await db.prepare(
                 `INSERT INTO conversations (id, user_id, message, response, created_at) VALUES (?, ?, ?, ?, ?)`
             ).bind(
@@ -260,16 +288,18 @@ app.post('/api/ask', async (c) => {
         }
 
         // 1.2 الاستعلام عن حالة الطلب
-        const orderMatch = question.match(/\b(\d{4,})\b/);
-        const isOrderQuery = question.includes('حالة طلبي') ||
-            question.includes('الطلب') ||
-            question.includes('شحنتي') ||
-            question.includes('تتبع');
+        const orderNumber = extractNumber(question);
+        const isOrderQuery = 
+            question.includes('طلب') || 
+            question.includes('شحنة') || 
+            question.includes('تتبع') ||
+            question.includes('Track') ||
+            question.includes('Order') ||
+            question.includes('طلبى') ||
+            question.includes('طلبي');
 
-        if (orderMatch && isOrderQuery) {
-            const orderNumber = orderMatch[1];
+        if (orderNumber && isOrderQuery) {
             const result = await getOrderStatus(orderNumber);
-
             await db.prepare(
                 `INSERT INTO conversations (id, user_id, message, response, created_at) VALUES (?, ?, ?, ?, ?)`
             ).bind(
