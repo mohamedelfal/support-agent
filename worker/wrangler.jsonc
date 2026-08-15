@@ -21,5 +21,11 @@
   "vars": {
     "AI_GATEWAY_ID": "support-gateway",
     "CLOUDFLARE_ACCOUNT_ID": "671de8495902b33abba2ad0db58f688a"
-  }
+  },
+  "agent_memory": [
+    {
+      "binding": "MEMORY",
+      "namespace": "support-agent-memory"
+    }
+  ]
 }
