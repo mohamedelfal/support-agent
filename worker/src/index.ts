@@ -31,15 +31,8 @@ const getOrderStatusTool = tool({
         orderNumber: z.string().describe('رقم الطلب الذي يريد العميل الاستعلام عنه'),
     }),
     execute: async ({ orderNumber }, { db, userId }) => {
-        const order = await (db as any).prepare(
-            'SELECT status, tracking_number FROM orders WHERE id = ? AND user_id = ?'
-        ).bind(orderNumber, userId).first();
-
-        if (order) {
-            return `حالة الطلب رقم ${orderNumber}: ${order.status}. رقم التتبع: ${order.tracking_number}`;
-        } else {
-            return `لم يتم العثور على طلب برقم ${orderNumber}. يرجى التأكد من الرقم والمحاولة مرة أخرى.`;
-        }
+        // محاكاة الاستعلام عن الطلب (يمكن استبدالها بجدول حقيقي)
+        return `حالة الطلب رقم ${orderNumber}: قيد التوصيل. رقم التتبع: TRK-${orderNumber}`;
     },
 });
 
@@ -79,7 +72,6 @@ class SupportAgent extends AIChatAgent<Env> {
 تعليماتك:
 - استخدم أداة getOrderStatus عندما يسأل العميل عن حالة طلبه.
 - استخدم أداة updateProfile عندما يطلب العميل تحديث بريده الإلكتروني.
-- عندما يطلب العميل إنشاء تذكرة دعم، أخبره أنك ستقوم بإنشائها بعد تأكيده.
 - أجب باللغة العربية الفصحى فقط وبإجابة مختصرة وواضحة.`;
 
         const result = await workersai.streamText({
@@ -164,10 +156,10 @@ app.get('/health/ready', async (c) => {
     }
 });
 
-// Authentication (مختصر للتوضيح، يُفضل استخدام الكود الكامل من مشروعك)
+// Authentication (مختصر للتوضيح)
 app.post('/api/auth/login', async (c) => {
     const { email } = await c.req.json();
-    // ... منطق تسجيل الدخول الكامل ...
+    // ... منطق تسجيل الدخول الكامل من مشروعك ...
     return c.json({ token: 'dummy', user: { id: '123', email } });
 });
 
