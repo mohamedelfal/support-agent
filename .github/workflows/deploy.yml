@@ -16,7 +16,7 @@ jobs:
       - name: Install dependencies
         run: |
           cd worker
-          npm install
+          npm install --legacy-peer-deps
       - run: cd worker && npx wrangler deploy
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
