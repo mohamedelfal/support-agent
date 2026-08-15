@@ -29,7 +29,13 @@ jobs:
             echo "⚠️ Namespace might already exist or an error occurred. Continuing..."
           fi
       
-      - run: cd worker && npm install
+      # تثبيت الحزم (بما فيها الحزم الجديدة)
+      - name: Install dependencies
+        run: |
+          cd worker
+          npm install
+          npm install --save-dev wrangler@4
+      
       - run: cd worker && npx wrangler deploy
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
