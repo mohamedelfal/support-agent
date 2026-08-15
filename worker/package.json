@@ -6,15 +6,7 @@
     "deploy": "wrangler deploy"
   },
   "dependencies": {
-    "hono": "^4.6.15",
-    "@cloudflare/ai-chat": "latest",
-    "agents": "latest",
-    "ai": "^4.0.0",
-    "workers-ai-provider": "latest",
-    "zod": "^3.23.8",
-    "@cloudflare/ai-utils": "latest",
-    "@modelcontextprotocol/sdk": "1.30.0",
-    "@modelcontextprotocol/client": "2.0.0"
+    "hono": "^4.6.15"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20250801.0",
