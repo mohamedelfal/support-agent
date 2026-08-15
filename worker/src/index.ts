@@ -1,5 +1,5 @@
 // ============================================================
-// وكيل دعم عملاء - الإصدار الهجين (معرفة + ذكاء اصطناعي)
+// وكيل دعم عملاء - الإصدار المستقر النهائي
 // ============================================================
 
 import { Hono } from 'hono';
@@ -172,7 +172,7 @@ app.get('/api/auth/me', async (c) => {
 });
 
 // ============================================================
-// 🤖 الوكيل الذكي (الإصدار الهجين)
+// 🤖 الوكيل الذكي - الإصدار المستقر
 // ============================================================
 app.post('/api/ask', async (c) => {
     try {
@@ -209,24 +209,27 @@ app.post('/api/ask', async (c) => {
         }
 
         // ============================================================
-        // 1. جلب آخر 5 محادثات للسياق
+        // 1. جلب آخر 5 محادثات (للسياق فقط، وليس للتنسيق)
         // ============================================================
         const { results: history } = await db.prepare(
             `SELECT message, response FROM conversations WHERE user_id = ? ORDER BY created_at DESC LIMIT 5`
         ).bind(userId).all();
 
-        const contextMessages = [];
-        for (const record of (history || []).reverse()) {
-            contextMessages.push({ role: 'user', content: record.message });
-            contextMessages.push({ role: 'assistant', content: record.response });
+        // نبني السياق كنص عادي، بدون تنسيقات محادثة
+        let contextText = '';
+        if (history && history.length > 0) {
+            const reversed = history.reverse();
+            contextText = 'المحادثات السابقة مع هذا العميل:\n';
+            for (const record of reversed) {
+                contextText += `- سؤال: ${record.message}\n- رد: ${record.response}\n`;
+            }
         }
 
         // ============================================================
-        // 2. البحث في جدول المعرفة (لجلب السياق الرسمي)
+        // 2. البحث في المعرفة (إن وجدت)
         // ============================================================
-        // نقسم السؤال إلى كلمات ونبحث عن أي تطابق
         const words = question.split(' ').filter(w => w.length > 2);
-        let knowledgeContext = '';
+        let knowledgeText = '';
         let foundKnowledge = false;
 
         for (const word of words) {
@@ -238,57 +241,44 @@ app.post('/api/ask', async (c) => {
 
             if (knowledgeResults.results && knowledgeResults.results.length > 0) {
                 const k = knowledgeResults.results[0];
-                knowledgeContext = `📌 **معلومة رسمية من سياسة الشركة:**\nس: ${k.question}\nج: ${k.answer}\n`;
+                knowledgeText = `معلومة رسمية من سياسة الشركة:\nسؤال: ${k.question}\nجواب: ${k.answer}`;
                 foundKnowledge = true;
                 break;
             }
         }
 
         // ============================================================
-        // 3. بناء System Prompt (يعتمد على وجود معرفة أم لا)
+        // 3. بناء System Prompt نظيف (بدون تنسيقات محادثة)
         // ============================================================
-        let historyText = '';
-        if (contextMessages.length > 0) {
-            historyText = '**سياق المحادثة السابقة:**\n';
-            for (let i = 0; i < contextMessages.length; i += 2) {
-                if (contextMessages[i] && contextMessages[i+1]) {
-                    historyText += `العميل: ${contextMessages[i].content}\nالوكيل: ${contextMessages[i+1].content}\n`;
-                }
-            }
-        }
-
         let systemPrompt = '';
 
         if (foundKnowledge) {
-            // إذا وجدنا معرفة، نلزم النموذج باستخدامها مع السماح بالإبداع في الصياغة
             systemPrompt = `أنت وكيل دعم عملاء محترف.
-تعليماتك:
-- استخدم المعلومة الرسمية المقدمة من سياسة الشركة في ردك.
-- يمكنك إعادة صياغة المعلومة بأسلوبك الخاص، مع الحفاظ على المعنى الدقيق.
-- لا تبدأ ردك بعبارة "من سياسة الشركة" أو "الإجابة من سياسة الشركة"، بل ادمج المعلومة بشكل طبيعي في الحوار.
-- إذا كان السؤال عاماً وليس له علاقة بالسياسة، يمكنك الإجابة من معرفتك العامة.
 
-${historyText ? historyText : ''}
+لديك معلومة رسمية من سياسة الشركة يجب أن تستخدمها في ردك. يمكنك إعادة صياغتها بأسلوبك الخاص، مع الحفاظ على المعنى الدقيق.
 
-${knowledgeContext}
+${knowledgeText}
 
-سؤال العميل: ${question}`;
+${contextText ? `\n${contextText}` : ''}
+
+تعليمات إضافية:
+- أجب على سؤال العميل الحالي باستخدام المعلومة الرسمية أعلاه.
+- لا تذكر عبارة "من سياسة الشركة" في ردك، بل ادمج المعلومة بشكل طبيعي.
+- إذا كان السؤال خارج نطاق المعلومة، يمكنك الإجابة من معرفتك العامة.`;
         } else {
-            // إذا لم نجد معرفة، نسمح بالإجابة العامة مع تنبيه لطيف
             systemPrompt = `أنت وكيل دعم عملاء محترف.
+
+${contextText ? `\n${contextText}` : ''}
+
 تعليماتك:
 - أجب على سؤال العميل بأفضل ما لديك من معرفة.
-- إذا كان السؤال يتعلق بسياسات الشركة (مثل الشحن، الاسترجاع، الحساب)، اعتذر واطلب من العميل التواصل مع الدعم البشري.
-- يمكنك الإجابة عن الأسئلة العامة والتقنية بحرية.
-- رد دائماً باللغة العربية الفصحى بأسلوب مهذب.
-
-${historyText ? historyText : ''}
-
-سؤال العميل: ${question}`;
+- إذا كان السؤال يتعلق بسياسات الشركة (مثل الشحن، الاسترجاع، الحساب) ولا تعرف الإجابة، اعتذر واطلب من العميل التواصل مع الدعم البشري.
+- بالنسبة للأسئلة العامة والتقنية، يمكنك الإجابة بحرية.
+- رد دائماً باللغة العربية الفصحى بأسلوب مهذب وواضح.`;
         }
 
         // ============================================================
-        // 4. استدعاء النموذج
+        // 4. استدعاء النموذج (مع إعدادات لمنع التكرار)
         // ============================================================
         let response;
         try {
@@ -299,23 +289,22 @@ ${historyText ? historyText : ''}
                         { role: 'system', content: systemPrompt },
                         { role: 'user', content: question }
                     ],
-                    temperature: 0.3,  // زيادة طفيفة للإبداع في الصياغة
+                    temperature: 0.3,
                     max_tokens: 800,
+                    top_p: 0.9,
                 }
             );
         } catch (aiError) {
             const errorMsg = (aiError as Error).message || 'خطأ غير معروف';
             console.error('❌ AI Error:', errorMsg);
             return c.json({ 
-                answer: `⚠️ **خطأ في الذكاء الاصطناعي:** ${errorMsg}\n\nيرجى المحاولة مرة أخرى.` 
+                answer: `⚠️ عذراً، حدث خطأ في الذكاء الاصطناعي. يرجى المحاولة مرة أخرى.` 
             }, 200);
         }
 
         // ============================================================
-        // 5. معالجة الاستجابة
+        // 5. استخراج الرد
         // ============================================================
-        console.log('🔍 AI Response:', JSON.stringify(response, null, 2));
-
         let answer = 
             response?.response ||
             response?.choices?.[0]?.message?.content ||
@@ -327,12 +316,16 @@ ${historyText ? historyText : ''}
             null;
 
         if (!answer) {
-            console.error('❌ No answer found in response:', JSON.stringify(response, null, 2));
             answer = '⚠️ عذراً، لم أستطع معالجة طلبك حالياً. حاول مرة أخرى.';
         }
 
+        // تنظيف بسيط للرد من أي تكرارات غير طبيعية
+        answer = answer.replace(/\*\*الوكيل:\*\*/g, '').replace(/\*\*العميل:\*\*/g, '');
+        answer = answer.replace(/الوكيل:/g, '').replace(/العميل:/g, '');
+        answer = answer.trim();
+
         // ============================================================
-        // 6. حفظ المحادثة في D1
+        // 6. حفظ المحادثة
         // ============================================================
         await db.prepare(
             `INSERT INTO conversations (id, user_id, message, response, created_at) VALUES (?, ?, ?, ?, ?)`
@@ -347,9 +340,8 @@ ${historyText ? historyText : ''}
         return c.json({ answer });
     } catch (e) {
         console.error('❌ Ask error:', e);
-        const errorMessage = (e as Error).message || 'خطأ غير معروف';
         return c.json({ 
-            answer: `⚠️ **خطأ في النظام:** ${errorMessage}\n\nيرجى إرسال هذه الرسالة للمطور.` 
+            answer: '⚠️ عذراً، حدث خطأ في النظام. يرجى المحاولة مرة أخرى.' 
         }, 200);
     }
 });
