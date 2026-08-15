@@ -3,38 +3,12 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-08-01",
   "compatibility_flags": ["nodejs_compat"],
-  "ai": {
-    "binding": "AI"
-  },
-  "d1_databases": [
-    {
-      "binding": "DB",
-      "database_name": "support-agent-db",
-      "database_id": "d3daf930-ea18-41cc-ac8a-5ba19166281c"
-    }
-  ],
-  "kv_namespaces": [
-    {
-      "binding": "RATE_LIMIT_KV",
-      "id": "173790c006424908b249f16568b4210d"
-    }
-  ],
-  "vars": {
-    "AI_GATEWAY_ID": "support-gateway",
-    "CLOUDFLARE_ACCOUNT_ID": "671de8495902b33abba2ad0db58f688a"
-  },
+  "ai": { "binding": "AI" },
+  "d1_databases": [{ "binding": "DB", "database_name": "support-agent-db", "database_id": "d3daf930-ea18-41cc-ac8a-5ba19166281c" }],
+  "kv_namespaces": [{ "binding": "RATE_LIMIT_KV", "id": "173790c006424908b249f16568b4210d" }],
+  "vars": { "AI_GATEWAY_ID": "support-gateway", "CLOUDFLARE_ACCOUNT_ID": "671de8495902b33abba2ad0db58f688a" },
   "durable_objects": {
-    "bindings": [
-      {
-        "name": "SupportAgent",
-        "class_name": "SupportAgent"
-      }
-    ]
+    "bindings": [{ "name": "SupportAgent", "class_name": "SupportAgent" }]
   },
-  "migrations": [
-    {
-      "tag": "v1",
-      "new_sqlite_classes": ["SupportAgent"]
-    }
-  ]
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["SupportAgent"] }]
 }
