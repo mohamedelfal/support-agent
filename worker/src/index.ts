@@ -1,15 +1,11 @@
 // ============================================================
-// وكيل دعم عملاء - مع أدوات (Tools) باستخدام AIChatAgent و workersai.streamText
-// متوافق مع أحدث وثائق Cloudflare (أغسطس 2026)
+// وكيل دعم عملاء - النهج المستقر (بدون AIChatAgent)
+// إدارة المحادثة عبر D1 + كشف مباشر للأدوات
 // ============================================================
 
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { sign, verify } from 'hono/jwt';
-import { AIChatAgent } from '@cloudflare/ai-chat';
-import { createWorkersAI } from 'workers-ai-provider';
-import { tool } from 'ai';
-import { z } from 'zod';
 
 type Env = {
     AI: Ai;
@@ -23,85 +19,8 @@ type Env = {
 const app = new Hono<{ Bindings: Env }>();
 
 // ============================================================
-// 1. تعريف الأدوات (Server-Side Tools)
-// ============================================================
-
-const getOrderStatusTool = tool({
-    description: 'استعلام عن حالة طلب محدد باستخدام رقم الطلب',
-    parameters: z.object({
-        orderNumber: z.string().describe('رقم الطلب الذي يريد العميل الاستعلام عنه'),
-    }),
-    execute: async ({ orderNumber }, { db, userId }) => {
-        return `📦 حالة الطلب رقم ${orderNumber}: قيد التوصيل. رقم التتبع: TRK-${orderNumber}`;
-    },
-});
-
-const updateProfileTool = tool({
-    description: 'تحديث البريد الإلكتروني للمستخدم',
-    parameters: z.object({
-        newEmail: z.string().email().describe('البريد الإلكتروني الجديد'),
-    }),
-    execute: async ({ newEmail }, { db, userId }) => {
-        await (db as any).prepare(
-            'UPDATE users SET email = ? WHERE id = ?'
-        ).bind(newEmail, userId).run();
-        return `✅ تم تحديث بريدك الإلكتروني إلى ${newEmail} بنجاح.`;
-    },
-});
-
-// ============================================================
-// 2. وكيل AIChatAgent المخصص
-// ============================================================
-
-export class SupportAgent extends AIChatAgent<Env> {
-    constructor(env: Env, userId: string) {
-        super(env);
-        this.userId = userId;
-    }
-
-    async onChatMessage() {
-        const workersai = createWorkersAI({ binding: this.env.AI });
-
-        const systemPrompt = `أنت وكيل دعم فني محترف في شركة عالمية.
-
-تعليماتك الأساسية:
-- استخدم أداة getOrderStatus عندما يسأل العميل عن حالة طلبه.
-- استخدم أداة updateProfile عندما يطلب العميل تحديث بريده الإلكتروني.
-- أجب باللغة العربية الفصحى فقط وبإجابة مختصرة وواضحة.
-- لا تكرر نفس الرد مرتين.
-- لا تعطِ روابط أو تعليمات غير حقيقية.`;
-
-        // ✅ استخدام workersai.streamText مباشرة مع this.messages
-        const result = await workersai.streamText({
-            model: '@cf/meta/llama-3.2-3b-instruct',
-            messages: this.messages,
-            system: systemPrompt,
-            tools: {
-                getOrderStatus: getOrderStatusTool,
-                updateProfile: updateProfileTool,
-            },
-            temperature: 0.7,
-            max_tokens: 256,
-            top_p: 0.9,
-        });
-
-        return result.toUIMessageStreamResponse();
-    }
-}
-
-// ============================================================
-// 3. نقاط النهاية (Endpoints)
-// ============================================================
-
-// CORS
-app.use('*', cors({
-    origin: ['https://support-agent-dxu.pages.dev', 'http://localhost:3000'],
-    allowMethods: ['GET', 'POST', 'OPTIONS'],
-    allowHeaders: ['Content-Type', 'Authorization'],
-    credentials: true,
-}));
-
 // Security Headers
+// ============================================================
 app.use('*', async (c, next) => {
     await next();
     c.res.headers.set('X-Content-Type-Options', 'nosniff');
@@ -112,18 +31,48 @@ app.use('*', async (c, next) => {
     );
 });
 
+// ============================================================
+// CORS
+// ============================================================
+app.use('*', cors({
+    origin: ['https://support-agent-dxu.pages.dev', 'http://localhost:3000'],
+    allowMethods: ['GET', 'POST', 'OPTIONS'],
+    allowHeaders: ['Content-Type', 'Authorization'],
+    credentials: true,
+}));
+
+// ============================================================
 // Health Checks
-app.get('/health/live', (c) => c.json({ status: 'alive' }));
+// ============================================================
+app.get('/health/live', (c) => {
+    return c.json({
+        status: 'alive',
+        timestamp: new Date().toISOString(),
+        uptime: process.uptime(),
+    });
+});
+
 app.get('/health/ready', async (c) => {
     try {
-        await c.env.DB.prepare('SELECT 1').first();
-        return c.json({ status: 'ready' });
-    } catch {
-        return c.json({ status: 'unhealthy' }, 503);
+        const db = c.env.DB;
+        await db.prepare('SELECT 1').first();
+        return c.json({
+            status: 'ready',
+            timestamp: new Date().toISOString(),
+            services: { database: 'healthy' },
+        });
+    } catch (error) {
+        return c.json({
+            status: 'not ready',
+            timestamp: new Date().toISOString(),
+            error: (error as Error).message,
+        }, 503);
     }
 });
 
+// ============================================================
 // Rate Limiting
+// ============================================================
 async function checkRateLimit(env: Env, email: string): Promise<{ allowed: boolean; remaining?: number; retryAfter?: number }> {
     const kv = env.RATE_LIMIT_KV;
     const key = `login:${email}`;
@@ -156,7 +105,9 @@ async function checkRateLimit(env: Env, email: string): Promise<{ allowed: boole
     return { allowed: true, remaining: maxAttempts - newAttempts };
 }
 
-// Authentication - Login
+// ============================================================
+// Authentication
+// ============================================================
 app.post('/api/auth/login', async (c) => {
     try {
         const { email } = await c.req.json();
@@ -196,7 +147,6 @@ app.post('/api/auth/login', async (c) => {
     }
 });
 
-// Authentication - Me
 app.get('/api/auth/me', async (c) => {
     try {
         const auth = c.req.header('Authorization');
@@ -223,7 +173,29 @@ app.get('/api/auth/me', async (c) => {
 });
 
 // ============================================================
-// 4. نقطة /ask (مع AIChatAgent والأدوات)
+// 🎯 الأدوات (الكشف المباشر)
+// ============================================================
+
+// أداة تحديث البريد الإلكتروني (كشف مباشر)
+async function updateProfile(db: D1Database, userId: string, newEmail: string): Promise<string> {
+    try {
+        await db.prepare(
+            'UPDATE users SET email = ? WHERE id = ?'
+        ).bind(newEmail, userId).run();
+        return `✅ تم تحديث بريدك الإلكتروني إلى ${newEmail} بنجاح.`;
+    } catch (error) {
+        return `❌ فشل تحديث البريد الإلكتروني: ${(error as Error).message}`;
+    }
+}
+
+// أداة الاستعلام عن حالة الطلب (محاكاة)
+async function getOrderStatus(orderNumber: string): Promise<string> {
+    // محاكاة الاستعلام عن الطلب
+    return `📦 حالة الطلب رقم ${orderNumber}: قيد التوصيل. رقم التتبع: TRK-${orderNumber}`;
+}
+
+// ============================================================
+// 🤖 نقطة /ask (إدارة المحادثة يدوياً)
 // ============================================================
 
 app.post('/api/ask', async (c) => {
@@ -261,7 +233,59 @@ app.post('/api/ask', async (c) => {
         }
 
         // ============================================================
-        // البحث عن سياسة في جدول المعرفة (رد مباشر)
+        // 1. الكشف المباشر عن الأدوات
+        // ============================================================
+
+        // 1.1 تحديث البريد الإلكتروني
+        const emailMatch = question.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
+        const isUpdateProfile = question.includes('تحديث بريدي') || 
+                                question.includes('غير إيميل') || 
+                                question.includes('تغيير الإيميل') || 
+                                question.includes('تغيير البريد') ||
+                                question.includes('ايميل جديد');
+
+        if (emailMatch && isUpdateProfile) {
+            const newEmail = emailMatch[0];
+            const result = await updateProfile(db, userId, newEmail);
+            
+            // حفظ المحادثة
+            await db.prepare(
+                `INSERT INTO conversations (id, user_id, message, response, created_at) VALUES (?, ?, ?, ?, ?)`
+            ).bind(
+                crypto.randomUUID(),
+                userId,
+                question,
+                result,
+                new Date().toISOString()
+            ).run();
+            return c.json({ answer: result });
+        }
+
+        // 1.2 الاستعلام عن حالة الطلب
+        const orderMatch = question.match(/\b(\d{4,})\b/);
+        const isOrderQuery = question.includes('حالة طلبي') || 
+                            question.includes('الطلب') || 
+                            question.includes('شحنتي') || 
+                            question.includes('تتبع');
+
+        if (orderMatch && isOrderQuery) {
+            const orderNumber = orderMatch[1];
+            const result = await getOrderStatus(orderNumber);
+            
+            await db.prepare(
+                `INSERT INTO conversations (id, user_id, message, response, created_at) VALUES (?, ?, ?, ?, ?)`
+            ).bind(
+                crypto.randomUUID(),
+                userId,
+                question,
+                result,
+                new Date().toISOString()
+            ).run();
+            return c.json({ answer: result });
+        }
+
+        // ============================================================
+        // 2. البحث عن سياسة في جدول المعرفة
         // ============================================================
         const words = question.split(' ').filter(w => w.length > 2);
         let knowledgeAnswer = '';
@@ -295,25 +319,60 @@ app.post('/api/ask', async (c) => {
         }
 
         // ============================================================
-        // استخدام AIChatAgent مع الأدوات للأسئلة العامة
+        // 3. الأسئلة العامة (استخدام AI.run)
         // ============================================================
-        const agent = new SupportAgent(c.env, userId);
 
-        const body = JSON.stringify({
-            messages: [{ role: 'user', content: question }]
-        });
-        const request = new Request('https://agent', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: body
-        });
+        // جلب آخر 5 محادثات للسياق
+        const { results: history } = await db.prepare(
+            `SELECT message, response FROM conversations WHERE user_id = ? ORDER BY created_at DESC LIMIT 5`
+        ).bind(userId).all();
 
-        const response = await agent.fetch(request);
-        const data = await response.json();
+        let contextText = '';
+        if (history && history.length > 0) {
+            const reversed = history.reverse();
+            contextText = 'المحادثات السابقة مع العميل:\n';
+            for (const record of reversed) {
+                contextText += `- سؤال: ${record.message}\n- رد: ${record.response}\n`;
+            }
+        }
 
-        let answer = data?.messages?.[data.messages.length - 1]?.content || 'عذراً، لم أستطع معالجة طلبك.';
+        const systemPrompt = `أنت وكيل دعم فني محترف في شركة عالمية.
+
+تعليماتك الأساسية:
+- أجب باللغة العربية الفصحى فقط وبإجابة مختصرة وواضحة.
+- لا تكرر نفس الرد مرتين.
+- لا تعطِ روابط أو تعليمات غير حقيقية.
+
+${contextText ? `\n${contextText}\n` : ''}
+
+سؤال العميل: ${question}`;
+
+        // استدعاء النموذج باستخدام AI.run
+        let aiResponse;
+        try {
+            aiResponse = await c.env.AI.run(
+                '@cf/meta/llama-3.2-3b-instruct',
+                {
+                    messages: [
+                        { role: 'system', content: systemPrompt },
+                        { role: 'user', content: question }
+                    ],
+                    temperature: 0.7,
+                    max_tokens: 256,
+                }
+            );
+        } catch (aiError) {
+            console.error('❌ AI Error:', aiError);
+            return c.json({
+                answer: '⚠️ عذراً، حدث خطأ في الذكاء الاصطناعي. حاول مرة أخرى.'
+            }, 200);
+        }
+
+        // استخراج الرد
+        let answer = (aiResponse as any).response || '⚠️ عذراً، لم أستطع معالجة طلبك.';
         answer = answer.trim();
 
+        // حفظ المحادثة
         await db.prepare(
             `INSERT INTO conversations (id, user_id, message, response, created_at) VALUES (?, ?, ?, ?, ?)`
         ).bind(
@@ -334,7 +393,9 @@ app.post('/api/ask', async (c) => {
     }
 });
 
-// Conversations - جلب المحادثات السابقة
+// ============================================================
+// 📜 جلب المحادثات السابقة
+// ============================================================
 app.get('/api/conversations', async (c) => {
     try {
         const auth = c.req.header('Authorization');
