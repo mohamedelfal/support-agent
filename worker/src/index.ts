@@ -1,5 +1,6 @@
 // ============================================================
 // وكيل دعم عملاء - مع نظام جلسات وتأكيد قبل تنفيذ الأدوات
+// شامل: تحديث البريد، تتبع الطلب، إنشاء تذكرة دعم
 // ============================================================
 
 import { Hono } from 'hono';
@@ -175,11 +176,10 @@ app.get('/api/auth/me', async (c) => {
 // 🎯 نظام الجلسات وإدارة التأكيدات
 // ============================================================
 
-// دالة لإنشاء جلسة جديدة
 async function createSession(db: D1Database, userId: string, action: string, step: string, data: any): Promise<string> {
     const sessionId = crypto.randomUUID();
     const now = new Date().toISOString();
-    const expiresAt = new Date(Date.now() + 5 * 60 * 1000).toISOString(); // 5 دقائق
+    const expiresAt = new Date(Date.now() + 5 * 60 * 1000).toISOString();
 
     await db.prepare(
         `INSERT INTO sessions (id, user_id, action, step, data, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)`
@@ -188,7 +188,6 @@ async function createSession(db: D1Database, userId: string, action: string, ste
     return sessionId;
 }
 
-// دالة لتحديث خطوة الجلسة
 async function updateSessionStep(db: D1Database, sessionId: string, step: string, data?: any) {
     const now = new Date().toISOString();
     let query = `UPDATE sessions SET step = ?, data = ?, created_at = ? WHERE id = ?`;
@@ -196,12 +195,10 @@ async function updateSessionStep(db: D1Database, sessionId: string, step: string
     await db.prepare(query).bind(...params).run();
 }
 
-// دالة لحذف الجلسة (بعد الانتهاء أو انتهاء الصلاحية)
 async function deleteSession(db: D1Database, sessionId: string) {
     await db.prepare('DELETE FROM sessions WHERE id = ?').bind(sessionId).run();
 }
 
-// دالة لجلب الجلسة النشطة للمستخدم
 async function getActiveSession(db: D1Database, userId: string): Promise<any | null> {
     const now = new Date().toISOString();
     const result = await db.prepare(
@@ -210,17 +207,15 @@ async function getActiveSession(db: D1Database, userId: string): Promise<any | n
     return result;
 }
 
-// دالة لتنظيف الجلسات المنتهية
 async function cleanExpiredSessions(db: D1Database) {
     const now = new Date().toISOString();
     await db.prepare('DELETE FROM sessions WHERE expires_at <= ?').bind(now).run();
 }
 
 // ============================================================
-// 🎯 الأدوات (مع نظام التأكيد)
+// 🎯 أدوات الاستخراج
 // ============================================================
 
-// استخراج الأرقام (عربية وإنجليزية)
 function extractNumber(text: string): string | null {
     const arabicToEnglish: { [key: string]: string } = {
         '٠': '0', '١': '1', '٢': '2', '٣': '3', '٤': '4',
@@ -234,13 +229,15 @@ function extractNumber(text: string): string | null {
     return match ? match[1] : null;
 }
 
-// استخراج البريد الإلكتروني
 function extractEmail(text: string): string | null {
     const match = text.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
     return match ? match[0] : null;
 }
 
-// أدوات التنفيذ الفعلية (تُستدعى بعد التأكيد)
+// ============================================================
+// 🎯 أدوات التنفيذ الفعلية
+// ============================================================
+
 async function executeUpdateEmail(db: D1Database, userId: string, newEmail: string): Promise<string> {
     try {
         await db.prepare('UPDATE users SET email = ? WHERE id = ?').bind(newEmail, userId).run();
@@ -251,8 +248,16 @@ async function executeUpdateEmail(db: D1Database, userId: string, newEmail: stri
 }
 
 async function executeTrackOrder(orderNumber: string): Promise<string> {
-    // محاكاة الاستعلام عن الطلب
     return `📦 حالة الطلب رقم ${orderNumber}: قيد التوصيل. رقم التتبع: TRK-${orderNumber}`;
+}
+
+async function executeCreateTicket(db: D1Database, userId: string, issue: string): Promise<string> {
+    const ticketId = crypto.randomUUID();
+    const now = new Date().toISOString();
+    await db.prepare(
+        `INSERT INTO tickets (id, user_id, issue, status, created_at) VALUES (?, ?, ?, ?, ?)`
+    ).bind(ticketId, userId, issue, 'open', now).run();
+    return `✅ تم إنشاء تذكرة دعم برقم ${ticketId.slice(0, 8)}. سيقوم فريق الدعم بالرد خلال ٢٤ ساعة.`;
 }
 
 // ============================================================
@@ -293,14 +298,11 @@ app.post('/api/ask', async (c) => {
             }, 400);
         }
 
-        // تنظيف الجلسات المنتهية
         await cleanExpiredSessions(db);
-
-        // البحث عن جلسة نشطة للمستخدم
         const activeSession = await getActiveSession(db, userId);
 
         // ============================================================
-        // 1. معالجة الجلسة النشطة (خطوات التأكيد)
+        // 1. معالجة الجلسة النشطة
         // ============================================================
         if (activeSession) {
             const session = activeSession as any;
@@ -308,33 +310,26 @@ app.post('/api/ask', async (c) => {
             const action = session.action;
             const step = session.step;
 
-            // 1.1 تحديث البريد الإلكتروني - تأكيد البريد الجديد
+            // 1.1 تحديث البريد - تأكيد البريد الجديد
             if (action === 'update_email' && step === 'awaiting_confirmation') {
-                // المستخدم يكتب البريد الجديد
                 const newEmail = extractEmail(question);
                 if (!newEmail) {
                     return c.json({
                         answer: '⚠️ يرجى كتابة البريد الإلكتروني الجديد بشكل صحيح (مثال: new@email.com).'
                     });
                 }
-                // حفظ البريد الجديد في الجلسة والانتقال إلى الخطوة التالية
-                await updateSessionStep(db, session.id, 'awaiting_code', { ...sessionData, newEmail });
-                // إرسال كود تحقق وهمي (محاكاة)
                 const verificationCode = Math.floor(100000 + Math.random() * 900000).toString();
-                // تخزين الكود في الجلسة (للمقارنة لاحقاً)
                 await updateSessionStep(db, session.id, 'awaiting_code', { ...sessionData, newEmail, code: verificationCode });
-
                 return c.json({
                     answer: `📧 تم استلام بريدك الإلكتروني الجديد: ${newEmail}. تم إرسال كود تحقق إلى بريدك القديم (محاكاة). الكود هو: ${verificationCode}. الرجاء إرسال الكود للتأكيد.`
                 });
             }
 
-            // 1.2 تحديث البريد الإلكتروني - تأكيد الكود
+            // 1.2 تحديث البريد - تأكيد الكود
             if (action === 'update_email' && step === 'awaiting_code') {
                 const enteredCode = question.trim();
                 const expectedCode = sessionData.code;
                 if (enteredCode === expectedCode) {
-                    // الكود صحيح، نقوم بتحديث البريد
                     const result = await executeUpdateEmail(db, userId, sessionData.newEmail);
                     await deleteSession(db, session.id);
                     await db.prepare(
@@ -356,7 +351,6 @@ app.post('/api/ask', async (c) => {
                         answer: '⚠️ يرجى كتابة رقم الطلب بشكل صحيح (أرقام فقط).'
                     });
                 }
-                // حفظ رقم الطلب والانتقال إلى التأكيد النهائي
                 await updateSessionStep(db, session.id, 'awaiting_final_confirm', { ...sessionData, orderNumber });
                 return c.json({
                     answer: `🔍 هل رقم الطلب ${orderNumber} هو الصحيح؟ الرجاء الرد بـ "نعم" أو "لا".`
@@ -381,15 +375,44 @@ app.post('/api/ask', async (c) => {
                 }
             }
 
-            // 1.5 إنشاء تذكرة (مستقبلاً)
-            // ... يمكن إضافة منطق مشابه للتذكرة
+            // 1.5 إنشاء تذكرة - تأكيد المشكلة
+            if (action === 'create_ticket' && step === 'awaiting_issue') {
+                // المستخدم يكتب وصف المشكلة
+                if (question.length < 5) {
+                    return c.json({
+                        answer: '⚠️ الرجاء كتابة وصف أوضح للمشكلة التي تواجهها (على الأقل 5 أحرف).'
+                    });
+                }
+                await updateSessionStep(db, session.id, 'awaiting_final_confirm', { ...sessionData, issue: question });
+                return c.json({
+                    answer: `📌 هل تريد إنشاء تذكرة دعم بالمشكلة التالية:\n\n"${question}"\n\nالرجاء الرد بـ "نعم" أو "لا".`
+                });
+            }
+
+            // 1.6 إنشاء تذكرة - التأكيد النهائي
+            if (action === 'create_ticket' && step === 'awaiting_final_confirm') {
+                const isYes = question.includes('نعم') || question.includes('Yes') || question.includes('yes');
+                if (isYes) {
+                    const result = await executeCreateTicket(db, userId, sessionData.issue);
+                    await deleteSession(db, session.id);
+                    await db.prepare(
+                        `INSERT INTO conversations (id, user_id, message, response, created_at) VALUES (?, ?, ?, ?, ?)`
+                    ).bind(crypto.randomUUID(), userId, question, result, new Date().toISOString()).run();
+                    return c.json({ answer: result });
+                } else {
+                    await deleteSession(db, session.id);
+                    return c.json({
+                        answer: '👍 تم إلغاء إنشاء التذكرة. هل يمكنني مساعدتك بشيء آخر؟'
+                    });
+                }
+            }
         }
 
         // ============================================================
-        // 2. لا توجد جلسة نشطة: نبدأ جلسة جديدة عند طلب أداة
+        // 2. بدء جلسات جديدة
         // ============================================================
 
-        // 2.1 تحديث البريد الإلكتروني - بدء الجلسة
+        // 2.1 تحديث البريد الإلكتروني
         const email = extractEmail(question);
         const isUpdateProfile =
             question.includes('تحديث') &&
@@ -398,14 +421,13 @@ app.post('/api/ask', async (c) => {
              question.includes('الإيميل') || question.includes('الايميل'));
 
         if (isUpdateProfile) {
-            // نطلب تأكيد البريد الجديد
             await createSession(db, userId, 'update_email', 'awaiting_confirmation', {});
             return c.json({
                 answer: '📧 الرجاء كتابة البريد الإلكتروني الجديد الذي ترغب في تحديثه.'
             });
         }
 
-        // 2.2 تتبع الطلب - بدء الجلسة
+        // 2.2 تتبع الطلب
         const isOrderQuery =
             question.includes('طلب') ||
             question.includes('شحنة') ||
@@ -416,10 +438,25 @@ app.post('/api/ask', async (c) => {
             question.includes('طلبي');
 
         if (isOrderQuery) {
-            // نطلب رقم الطلب
             await createSession(db, userId, 'track_order', 'awaiting_confirmation', {});
             return c.json({
                 answer: '📦 الرجاء كتابة رقم الطلب الذي ترغب في تتبعه.'
+            });
+        }
+
+        // 🆕 2.3 إنشاء تذكرة دعم
+        const isTicketRequest =
+            question.includes('تذكرة') ||
+            question.includes('شكوى') ||
+            question.includes('مشكلة') ||
+            question.includes('دعم') ||
+            question.includes('Ticket') ||
+            question.includes('ticket');
+
+        if (isTicketRequest) {
+            await createSession(db, userId, 'create_ticket', 'awaiting_issue', {});
+            return c.json({
+                answer: '📌 الرجاء كتابة وصف المشكلة التي تواجهها بالتفصيل.'
             });
         }
 
@@ -458,10 +495,8 @@ app.post('/api/ask', async (c) => {
         }
 
         // ============================================================
-        // 4. الأسئلة العامة (استخدام AI.run)
+        // 4. الأسئلة العامة
         // ============================================================
-
-        // جلب آخر 5 محادثات للسياق
         const { results: history } = await db.prepare(
             `SELECT message, response FROM conversations WHERE user_id = ? ORDER BY created_at DESC LIMIT 5`
         ).bind(userId).all();
