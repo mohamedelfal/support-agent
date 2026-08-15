@@ -6,6 +6,7 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { sign, verify } from 'hono/jwt';
 import { AIChatAgent } from '@cloudflare/ai-chat';
+import { createWorkersAI } from 'workers-ai-provider';
 import { tool } from 'ai';
 import { z } from 'zod';
 
@@ -66,6 +67,8 @@ class SupportAgent extends AIChatAgent<Env> {
     }
 
     async onChatMessage() {
+        const workersai = createWorkersAI({ binding: this.env.AI });
+
         const tools = {
             getOrderStatus: getOrderStatusTool,
             updateProfile: updateProfileTool,
@@ -79,7 +82,7 @@ class SupportAgent extends AIChatAgent<Env> {
 - عندما يطلب العميل إنشاء تذكرة دعم، أخبره أنك ستقوم بإنشائها بعد تأكيده.
 - أجب باللغة العربية الفصحى فقط وبإجابة مختصرة وواضحة.`;
 
-        const result = await this.ai.streamText({
+        const result = await workersai.streamText({
             model: '@cf/meta/llama-3.2-3b-instruct',
             messages: this.messages,
             system: systemPrompt,
@@ -139,9 +142,44 @@ app.post('/api/ask', async (c) => {
 });
 
 // ============================================================
-// 4. نقاط النهاية الأخرى
+// 4. نقاط النهاية الأخرى (مختصرة)
 // ============================================================
 
-// ... (نقاط النهاية الخاصة بـ Security, CORS, Health, Auth, و Conversations تبقى كما هي)
+// CORS
+app.use('*', cors({
+    origin: ['https://support-agent-dxu.pages.dev', 'http://localhost:3000'],
+    allowMethods: ['GET', 'POST', 'OPTIONS'],
+    allowHeaders: ['Content-Type', 'Authorization'],
+    credentials: true,
+}));
+
+// Health Checks
+app.get('/health/live', (c) => c.json({ status: 'alive' }));
+app.get('/health/ready', async (c) => {
+    try {
+        await c.env.DB.prepare('SELECT 1').first();
+        return c.json({ status: 'ready' });
+    } catch {
+        return c.json({ status: 'unhealthy' }, 503);
+    }
+});
+
+// Authentication (مختصر للتوضيح، يُفضل استخدام الكود الكامل من مشروعك)
+app.post('/api/auth/login', async (c) => {
+    const { email } = await c.req.json();
+    // ... منطق تسجيل الدخول الكامل ...
+    return c.json({ token: 'dummy', user: { id: '123', email } });
+});
+
+app.get('/api/auth/me', async (c) => {
+    // ... منطق التحقق من التوكن ...
+    return c.json({ user: { id: '123', email: 'user@example.com' } });
+});
+
+// Conversations
+app.get('/api/conversations', async (c) => {
+    // ... منطق جلب المحادثات ...
+    return c.json({ conversations: [] });
+});
 
 export default app;
