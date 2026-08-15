@@ -15,26 +15,6 @@ jobs:
         with:
           node-version: '22'
       
-      # 🧹 خطوة التنظيف الجديدة
-      - name: Clean Wrangler cache
-        run: |
-          rm -rf node_modules/.cache/wrangler
-          rm -rf .wrangler
-      
-      - name: Create Agent Memory Namespace
-        run: |
-          echo "Creating Agent Memory Namespace: support-agent-memory"
-          RESPONSE=$(curl -s -X POST "https://api.cloudflare.com/client/v4/accounts/${{ secrets.CLOUDFLARE_ACCOUNT_ID }}/agent_memory/namespaces" \
-            -H "Authorization: Bearer ${{ secrets.CLOUDFLARE_API_TOKEN }}" \
-            -H "Content-Type: application/json" \
-            -d '{"name": "support-agent-memory"}')
-          echo "Response: $RESPONSE"
-          if echo "$RESPONSE" | grep -q '"success":true'; then
-            echo "✅ Namespace created successfully."
-          else
-            echo "⚠️ Namespace might already exist or an error occurred. Continuing..."
-          fi
-      
       - name: Install dependencies
         run: |
           cd worker
