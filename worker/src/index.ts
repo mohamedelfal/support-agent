@@ -1,5 +1,5 @@
 // ============================================================
-// وكيل دعم عملاء - نسخة مبسّطة مع Agent Memory
+// وكيل دعم عملاء - الإصدار النهائي (مع D1 فقط)
 // ============================================================
 
 import { Hono } from 'hono';
@@ -13,7 +13,6 @@ type Env = {
     RATE_LIMIT_KV: KVNamespace;
     AI_GATEWAY_ID: string;
     CLOUDFLARE_ACCOUNT_ID: string;
-    MEMORY: AgentMemoryNamespace;
 };
 
 const app = new Hono<{ Bindings: Env }>();
@@ -173,7 +172,7 @@ app.get('/api/auth/me', async (c) => {
 });
 
 // ============================================================
-// 🤖 نقطة /ask (مع Agent Memory)
+// 🤖 نقطة /ask (مع D1 للذاكرة)
 // ============================================================
 app.post('/api/ask', async (c) => {
     try {
@@ -244,23 +243,29 @@ app.post('/api/ask', async (c) => {
         }
 
         // ============================================================
-        // 2. استرجاع الذاكرة طويلة المدى (Agent Memory)
+        // 2. جلب آخر 5 محادثات للسياق (الذاكرة عبر D1)
         // ============================================================
-        const profile = c.env.MEMORY.getProfile(userId);
-        let memoryContext = '';
-        try {
-            const recallResult = await profile.recall(question);
-            if (recallResult && recallResult.answer) {
-                memoryContext = `\n\nمعلومات من ذاكرة المحادثات السابقة: ${recallResult.answer}`;
+        const { results: history } = await db.prepare(
+            `SELECT message, response FROM conversations WHERE user_id = ? ORDER BY created_at DESC LIMIT 5`
+        ).bind(userId).all();
+
+        let contextText = '';
+        if (history && history.length > 0) {
+            const reversed = history.reverse();
+            contextText = 'المحادثات السابقة مع العميل:\n';
+            for (const record of reversed) {
+                contextText += `- سؤال: ${record.message}\n- رد: ${record.response}\n`;
             }
-        } catch (e) {
-            console.error('خطأ في استرجاع الذاكرة:', e);
         }
 
         // ============================================================
-        // 3. بناء System Prompt مع سياق الذاكرة
+        // 3. بناء System Prompt مع سياق المحادثات السابقة
         // ============================================================
-        const systemPrompt = `أنت وكيل دعم فني. أجب بالعربية الفصحى فقط وبإجابة مختصرة (جملتين كحد أقصى). استخدم المعلومات التالية من ذاكرة العميل إذا كانت مفيدة: ${memoryContext}`;
+        const systemPrompt = `أنت وكيل دعم فني. أجب بالعربية الفصحى فقط وبإجابة مختصرة (جملتين كحد أقصى).
+
+${contextText ? `\n${contextText}\n` : ''}
+
+سؤال العميل: ${question}`;
 
         // ============================================================
         // 4. استدعاء النموذج
@@ -306,18 +311,7 @@ app.post('/api/ask', async (c) => {
         answer = answer.trim();
 
         // ============================================================
-        // 6. حفظ الذاكرة (Agent Memory)
-        // ============================================================
-        try {
-            await profile.ingest([
-                { role: 'user', content: question }
-            ]);
-        } catch (e) {
-            console.error('خطأ في حفظ الذاكرة:', e);
-        }
-
-        // ============================================================
-        // 7. حفظ المحادثة في D1
+        // 6. حفظ المحادثة في D1
         // ============================================================
         await db.prepare(
             `INSERT INTO conversations (id, user_id, message, response, created_at) VALUES (?, ?, ?, ?, ?)`
