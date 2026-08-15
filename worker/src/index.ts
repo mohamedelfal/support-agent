@@ -1,5 +1,6 @@
 // ============================================================
-// وكيل دعم عملاء - مع كشف مباشر للأدوات (بدون Function Calling)
+// وكيل دعم عملاء - مع أدوات (Tools) باستخدام AIChatAgent و runWithTools
+// الإصدار النهائي المتوافق مع أغسطس 2026
 // ============================================================
 
 import { Hono } from 'hono';
@@ -7,6 +8,7 @@ import { cors } from 'hono/cors';
 import { sign, verify } from 'hono/jwt';
 import { AIChatAgent } from '@cloudflare/ai-chat';
 import { createWorkersAI } from 'workers-ai-provider';
+import { runWithTools } from '@cloudflare/ai-utils';
 import { tool } from 'ai';
 import { z } from 'zod';
 
@@ -22,23 +24,35 @@ type Env = {
 const app = new Hono<{ Bindings: Env }>();
 
 // ============================================================
-// 1. تعريف الأدوات (كدوال عادية)
+// 1. تعريف الأدوات (Server-Side Tools)
 // ============================================================
 
-async function getOrderStatus(db: D1Database, userId: string, orderNumber: string): Promise<string> {
-    // محاكاة الاستعلام عن الطلب (يمكن استبدالها بجدول حقيقي)
-    return `📦 حالة الطلب رقم ${orderNumber}: قيد التوصيل. رقم التتبع: TRK-${orderNumber}`;
-}
+const getOrderStatusTool = tool({
+    description: 'استعلام عن حالة طلب محدد باستخدام رقم الطلب',
+    parameters: z.object({
+        orderNumber: z.string().describe('رقم الطلب الذي يريد العميل الاستعلام عنه'),
+    }),
+    execute: async ({ orderNumber }, { db, userId }) => {
+        // محاكاة الاستعلام عن الطلب
+        return `📦 حالة الطلب رقم ${orderNumber}: قيد التوصيل. رقم التتبع: TRK-${orderNumber}`;
+    },
+});
 
-async function updateProfile(db: D1Database, userId: string, newEmail: string): Promise<string> {
-    await db.prepare(
-        'UPDATE users SET email = ? WHERE id = ?'
-    ).bind(newEmail, userId).run();
-    return `✅ تم تحديث بريدك الإلكتروني إلى ${newEmail} بنجاح.`;
-}
+const updateProfileTool = tool({
+    description: 'تحديث البريد الإلكتروني للمستخدم',
+    parameters: z.object({
+        newEmail: z.string().email().describe('البريد الإلكتروني الجديد'),
+    }),
+    execute: async ({ newEmail }, { db, userId }) => {
+        await (db as any).prepare(
+            'UPDATE users SET email = ? WHERE id = ?'
+        ).bind(newEmail, userId).run();
+        return `✅ تم تحديث بريدك الإلكتروني إلى ${newEmail} بنجاح.`;
+    },
+});
 
 // ============================================================
-// 2. وكيل AIChatAgent (للأسئلة العامة فقط)
+// 2. وكيل AIChatAgent المخصص (مع runWithTools)
 // ============================================================
 
 export class SupportAgent extends AIChatAgent<Env> {
@@ -48,25 +62,31 @@ export class SupportAgent extends AIChatAgent<Env> {
     }
 
     async onChatMessage() {
-        const workersai = createWorkersAI({ binding: this.env.AI });
-
         const systemPrompt = `أنت وكيل دعم فني محترف في شركة عالمية.
 
 تعليماتك الأساسية:
+- استخدم أداة getOrderStatus عندما يسأل العميل عن حالة طلبه.
+- استخدم أداة updateProfile عندما يطلب العميل تحديث بريده الإلكتروني.
 - أجب باللغة العربية الفصحى فقط وبإجابة مختصرة وواضحة.
 - لا تكرر نفس الرد مرتين.
 - لا تعطِ روابط أو تعليمات غير حقيقية.`;
 
-        const result = await workersai.streamText({
-            model: '@cf/meta/llama-3.2-3b-instruct',
-            messages: this.messages,
-            system: systemPrompt,
-            temperature: 0.7,
-            max_tokens: 256,
-            top_p: 0.9,
-            repetition_penalty: 1.1,
-        });
+        // استخدام runWithTools بدلاً من streamText
+        // هذه هي الطريقة الرسمية الموصى بها لاستدعاء الأدوات
+        const result = await runWithTools(
+            this.env.AI,
+            '@cf/meta/llama-3.2-3b-instruct',
+            {
+                messages: this.messages,
+                tools: [getOrderStatusTool, updateProfileTool],
+                system: systemPrompt,
+                temperature: 0.7,
+                max_tokens: 256,
+                top_p: 0.9,
+            }
+        );
 
+        // تحويل النتيجة إلى تدفق UI
         return result.toUIMessageStreamResponse();
     }
 }
@@ -205,7 +225,7 @@ app.get('/api/auth/me', async (c) => {
 });
 
 // ============================================================
-// 3. نقطة /ask (مع كشف مباشر للأدوات)
+// 4. نقطة /ask (مع AIChatAgent والأدوات)
 // ============================================================
 
 app.post('/api/ask', async (c) => {
@@ -243,51 +263,7 @@ app.post('/api/ask', async (c) => {
         }
 
         // ============================================================
-        // 🔥 الخطوة 1: كشف مباشر للأدوات (بدون Function Calling)
-        // ============================================================
-
-        // 1.1 الكشف عن رقم الطلب في السؤال
-        const orderMatch = question.match(/\b(\d{4,})\b/);
-        const isOrderQuery = question.includes('حالة طلبي') || question.includes('الطلب') || question.includes('شحنتي') || question.includes('تتبع');
-        
-        if (orderMatch && isOrderQuery) {
-            const orderNumber = orderMatch[1];
-            const result = await getOrderStatus(db, userId, orderNumber);
-            
-            await db.prepare(
-                `INSERT INTO conversations (id, user_id, message, response, created_at) VALUES (?, ?, ?, ?, ?)`
-            ).bind(
-                crypto.randomUUID(),
-                userId,
-                question,
-                result,
-                new Date().toISOString()
-            ).run();
-            return c.json({ answer: result });
-        }
-
-        // 1.2 الكشف عن تحديث البريد الإلكتروني
-        const emailMatch = question.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
-        const isUpdateProfile = question.includes('تحديث بريدي') || question.includes('غير إيميل') || question.includes('تغيير الإيميل') || question.includes('تغيير البريد');
-        
-        if (emailMatch && isUpdateProfile) {
-            const newEmail = emailMatch[0];
-            const result = await updateProfile(db, userId, newEmail);
-            
-            await db.prepare(
-                `INSERT INTO conversations (id, user_id, message, response, created_at) VALUES (?, ?, ?, ?, ?)`
-            ).bind(
-                crypto.randomUUID(),
-                userId,
-                question,
-                result,
-                new Date().toISOString()
-            ).run();
-            return c.json({ answer: result });
-        }
-
-        // ============================================================
-        // 🔥 الخطوة 2: البحث عن سياسة في جدول المعرفة
+        // البحث عن سياسة في جدول المعرفة (رد مباشر)
         // ============================================================
         const words = question.split(' ').filter(w => w.length > 2);
         let knowledgeAnswer = '';
@@ -321,7 +297,7 @@ app.post('/api/ask', async (c) => {
         }
 
         // ============================================================
-        // 🔥 الخطوة 3: الأسئلة العامة (استخدام AIChatAgent)
+        // استخدام AIChatAgent مع runWithTools للأسئلة العامة
         // ============================================================
         const agent = new SupportAgent(c.env, userId);
 
