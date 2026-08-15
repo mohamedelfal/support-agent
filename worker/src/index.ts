@@ -1,6 +1,5 @@
 // ============================================================
-// وكيل دعم عملاء - Support Agent Worker (الإصدار النهائي)
-// استرجاع دقيق + تعليمات صارمة
+// وكيل دعم عملاء - الإصدار الهجين (معرفة + ذكاء اصطناعي)
 // ============================================================
 
 import { Hono } from 'hono';
@@ -173,7 +172,7 @@ app.get('/api/auth/me', async (c) => {
 });
 
 // ============================================================
-// 🤖 الوكيل الذكي (الإصدار النهائي - استرجاع دقيق جداً)
+// 🤖 الوكيل الذكي (الإصدار الهجين)
 // ============================================================
 app.post('/api/ask', async (c) => {
     try {
@@ -223,14 +222,13 @@ app.post('/api/ask', async (c) => {
         }
 
         // ============================================================
-        // 2. 🔥 البحث الدقيق في المعرفة (أكثر دقة)
+        // 2. البحث في جدول المعرفة (لجلب السياق الرسمي)
         // ============================================================
-        // نقسم السؤال إلى كلمات ونبحث عن أي تطابق في question أو keywords
+        // نقسم السؤال إلى كلمات ونبحث عن أي تطابق
         const words = question.split(' ').filter(w => w.length > 2);
+        let knowledgeContext = '';
         let foundKnowledge = false;
-        let knowledgeAnswer = '';
 
-        // نبحث عن أول تطابق
         for (const word of words) {
             const knowledgeResults = await db.prepare(
                 `SELECT question, answer FROM knowledge 
@@ -240,39 +238,102 @@ app.post('/api/ask', async (c) => {
 
             if (knowledgeResults.results && knowledgeResults.results.length > 0) {
                 const k = knowledgeResults.results[0];
-                knowledgeAnswer = k.answer;
+                knowledgeContext = `📌 **معلومة رسمية من سياسة الشركة:**\nس: ${k.question}\nج: ${k.answer}\n`;
                 foundKnowledge = true;
-                break; // نأخذ أول تطابق فقط
+                break;
             }
         }
 
         // ============================================================
-        // 3. بناء الرد (بدون استدعاء AI إذا وجدنا تطابقاً)
+        // 3. بناء System Prompt (يعتمد على وجود معرفة أم لا)
         // ============================================================
-        if (foundKnowledge) {
-            // نرد مباشرة من قاعدة المعرفة بدون استدعاء النموذج
-            const answer = `📚 **الإجابة من سياسة الشركة:**\n\n${knowledgeAnswer}`;
-            
-            // حفظ المحادثة
-            await db.prepare(
-                `INSERT INTO conversations (id, user_id, message, response, created_at) VALUES (?, ?, ?, ?, ?)`
-            ).bind(
-                crypto.randomUUID(),
-                userId,
-                question,
-                answer,
-                new Date().toISOString()
-            ).run();
+        let historyText = '';
+        if (contextMessages.length > 0) {
+            historyText = '**سياق المحادثة السابقة:**\n';
+            for (let i = 0; i < contextMessages.length; i += 2) {
+                if (contextMessages[i] && contextMessages[i+1]) {
+                    historyText += `العميل: ${contextMessages[i].content}\nالوكيل: ${contextMessages[i+1].content}\n`;
+                }
+            }
+        }
 
-            return c.json({ answer });
+        let systemPrompt = '';
+
+        if (foundKnowledge) {
+            // إذا وجدنا معرفة، نلزم النموذج باستخدامها مع السماح بالإبداع في الصياغة
+            systemPrompt = `أنت وكيل دعم عملاء محترف.
+تعليماتك:
+- استخدم المعلومة الرسمية المقدمة من سياسة الشركة في ردك.
+- يمكنك إعادة صياغة المعلومة بأسلوبك الخاص، مع الحفاظ على المعنى الدقيق.
+- لا تبدأ ردك بعبارة "من سياسة الشركة" أو "الإجابة من سياسة الشركة"، بل ادمج المعلومة بشكل طبيعي في الحوار.
+- إذا كان السؤال عاماً وليس له علاقة بالسياسة، يمكنك الإجابة من معرفتك العامة.
+
+${historyText ? historyText : ''}
+
+${knowledgeContext}
+
+سؤال العميل: ${question}`;
+        } else {
+            // إذا لم نجد معرفة، نسمح بالإجابة العامة مع تنبيه لطيف
+            systemPrompt = `أنت وكيل دعم عملاء محترف.
+تعليماتك:
+- أجب على سؤال العميل بأفضل ما لديك من معرفة.
+- إذا كان السؤال يتعلق بسياسات الشركة (مثل الشحن، الاسترجاع، الحساب)، اعتذر واطلب من العميل التواصل مع الدعم البشري.
+- يمكنك الإجابة عن الأسئلة العامة والتقنية بحرية.
+- رد دائماً باللغة العربية الفصحى بأسلوب مهذب.
+
+${historyText ? historyText : ''}
+
+سؤال العميل: ${question}`;
         }
 
         // ============================================================
-        // 4. إذا لم نجد تطابقاً → نطلب تذكرة (بدون استدعاء AI)
+        // 4. استدعاء النموذج
         // ============================================================
-        const answer = `⚠️ **عذراً، لا توجد إجابة رسمية لهذا السؤال في قاعدة المعرفة.**\n\nيرجى كتابة "تذكرة" وسيقوم فريق الدعم بالرد عليك خلال ٢٤ ساعة.`;
+        let response;
+        try {
+            response = await c.env.AI.run(
+                '@cf/meta/llama-3.2-1b-instruct',
+                {
+                    messages: [
+                        { role: 'system', content: systemPrompt },
+                        { role: 'user', content: question }
+                    ],
+                    temperature: 0.3,  // زيادة طفيفة للإبداع في الصياغة
+                    max_tokens: 800,
+                }
+            );
+        } catch (aiError) {
+            const errorMsg = (aiError as Error).message || 'خطأ غير معروف';
+            console.error('❌ AI Error:', errorMsg);
+            return c.json({ 
+                answer: `⚠️ **خطأ في الذكاء الاصطناعي:** ${errorMsg}\n\nيرجى المحاولة مرة أخرى.` 
+            }, 200);
+        }
 
-        // حفظ المحادثة
+        // ============================================================
+        // 5. معالجة الاستجابة
+        // ============================================================
+        console.log('🔍 AI Response:', JSON.stringify(response, null, 2));
+
+        let answer = 
+            response?.response ||
+            response?.choices?.[0]?.message?.content ||
+            response?.result?.response ||
+            response?.output?.text ||
+            response?.content ||
+            response?.text ||
+            response?.message?.content ||
+            null;
+
+        if (!answer) {
+            console.error('❌ No answer found in response:', JSON.stringify(response, null, 2));
+            answer = '⚠️ عذراً، لم أستطع معالجة طلبك حالياً. حاول مرة أخرى.';
+        }
+
+        // ============================================================
+        // 6. حفظ المحادثة في D1
+        // ============================================================
         await db.prepare(
             `INSERT INTO conversations (id, user_id, message, response, created_at) VALUES (?, ?, ?, ?, ?)`
         ).bind(
@@ -284,7 +345,6 @@ app.post('/api/ask', async (c) => {
         ).run();
 
         return c.json({ answer });
-
     } catch (e) {
         console.error('❌ Ask error:', e);
         const errorMessage = (e as Error).message || 'خطأ غير معروف';
