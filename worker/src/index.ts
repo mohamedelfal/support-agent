@@ -234,7 +234,6 @@ const trackOrderTool = tool({
     orderNumber: z.string().describe('رقم الطلب'),
   }),
   execute: async ({ orderNumber }) => {
-    // محاكاة - يمكن ربطها بجدول حقيقي
     return `📦 حالة الطلب رقم ${orderNumber}: قيد التوصيل. رقم التتبع: TRK-${orderNumber}`;
   },
 });
@@ -242,14 +241,12 @@ const trackOrderTool = tool({
 /**
  * أداة إنشاء تذكرة دعم (بدون execute)
  * هذه الأداة تتطلب موافقة المستخدم (Human-in-the-loop)
- * لذلك لا تحتوي على دالة execute، وسيطلب AIChatAgent تأكيد المستخدم
  */
 const createTicketTool = tool({
   description: 'إنشاء تذكرة دعم جديدة لمشكلة يواجهها العميل.',
   parameters: z.object({
     issue: z.string().describe('وصف المشكلة بالتفصيل'),
   }),
-  // لا يوجد execute - ستتعامل الواجهة الأمامية مع التأكيد
 });
 
 // ============================================================
@@ -286,7 +283,7 @@ export class SupportAgent extends AIChatAgent<Env> {
       messages: this.messages,
       system: systemPrompt,
       tools: tools,
-      maxSteps: 5, // السماح بخطوات متعددة للأدوات
+      maxSteps: 5,
       temperature: 0.7,
       max_tokens: 256,
     });
@@ -301,7 +298,6 @@ export class SupportAgent extends AIChatAgent<Env> {
 
 app.post('/api/ask', async (c) => {
   try {
-    // المصادقة
     const auth = c.req.header('Authorization');
     if (!auth) return c.json({ error: 'Unauthorized' }, 401);
 
@@ -311,7 +307,6 @@ app.post('/api/ask', async (c) => {
 
     const userId = payload.sub;
 
-    // جلب المستخدم
     const db = c.env.DB;
     const user = await db
       .prepare('SELECT id FROM users WHERE id = ?')
@@ -319,17 +314,14 @@ app.post('/api/ask', async (c) => {
       .first();
     if (!user) return c.json({ error: 'User not found' }, 404);
 
-    // قراءة السؤال
     const { question } = await c.req.json();
     if (!question) return c.json({ error: 'Question required' }, 400);
     if (question.length > 1000) {
       return c.json({ error: 'Question too long (max 1000 chars)' }, 400);
     }
 
-    // إنشاء وكيل جديد لكل طلب
     const agent = new SupportAgent(c.env, userId);
 
-    // محاكاة طلب WebSocket لـ AIChatAgent
     const body = JSON.stringify({
       messages: [{ role: 'user', content: question }]
     });
@@ -342,11 +334,9 @@ app.post('/api/ask', async (c) => {
     const response = await agent.fetch(request);
     const data = await response.json();
 
-    // استخراج الرد
     let answer = data?.messages?.[data.messages.length - 1]?.content || 'عذراً، لم أستطع معالجة طلبك.';
     answer = answer.trim();
 
-    // حفظ المحادثة في D1 (للتاريخ)
     await db
       .prepare(
         'INSERT INTO conversations (id, user_id, message, response, created_at) VALUES (?, ?, ?, ?, ?)'
