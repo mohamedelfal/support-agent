@@ -10,9 +10,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      
+      # ✅ التغيير الجوهري: تحديد Node.js 22
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'  # تم التغيير من '20' إلى '22'
       
       # إنشاء Agent Memory Namespace تلقائياً
       - name: Create Agent Memory Namespace
