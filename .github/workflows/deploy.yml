@@ -11,12 +11,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       
-      # ✅ التغيير الجوهري: تحديد Node.js 22
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'  # تم التغيير من '20' إلى '22'
+          node-version: '22'
       
-      # إنشاء Agent Memory Namespace تلقائياً
       - name: Create Agent Memory Namespace
         run: |
           echo "Creating Agent Memory Namespace: support-agent-memory"
@@ -31,7 +29,6 @@ jobs:
             echo "⚠️ Namespace might already exist or an error occurred. Continuing..."
           fi
       
-      # تثبيت الحزم مع حل تعارضات التبعيات
       - name: Install dependencies
         run: |
           cd worker
