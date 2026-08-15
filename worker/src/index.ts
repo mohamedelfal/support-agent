@@ -1,5 +1,6 @@
 // ============================================================
-// وكيل دعم عملاء - Support Agent Worker (نسخة التشخيص)
+// وكيل دعم عملاء - Support Agent Worker (نسخة مستقرة)
+// يستخدم النموذج: @cf/meta/llama-3.2-1b-instruct
 // ============================================================
 
 import { Hono } from 'hono';
@@ -172,7 +173,7 @@ app.get('/api/auth/me', async (c) => {
 });
 
 // ============================================================
-// 🤖 الوكيل الذكي (مع تشخيص الأخطاء)
+// 🤖 الوكيل الذكي (وكيل دعم العملاء)
 // ============================================================
 app.post('/api/ask', async (c) => {
     try {
@@ -222,7 +223,7 @@ app.post('/api/ask', async (c) => {
         }
 
         // ============================================================
-        // 2. البحث في جدول المعرفة
+        // 2. البحث في جدول المعرفة (Knowledge Base)
         // ============================================================
         const knowledgeResults = await db.prepare(
             `SELECT question, answer FROM knowledge WHERE keywords LIKE ? OR question LIKE ? LIMIT 3`
@@ -239,7 +240,7 @@ app.post('/api/ask', async (c) => {
         }
 
         // ============================================================
-        // 3. بناء System Prompt
+        // 3. بناء System Prompt الخاص بوكيل الدعم
         // ============================================================
         let historyText = '';
         if (contextMessages.length > 0) {
@@ -266,13 +267,12 @@ ${knowledgeContext}
 الآن، سؤال العميل الحالي: ${question}`;
 
         // ============================================================
-        // 4. استدعاء Workers AI (مع تشخيص دقيق)
+        // 4. 🚀 استدعاء النموذج المناسب (محدث وجديد)
         // ============================================================
         let response;
         try {
-            // 🔥 بنحاول نستخدم النموذج المباشر الأول (الأسرع والأكثر استقراراً)
             response = await c.env.AI.run(
-                '@cf/meta/llama-3-8b-instruct', // نموذج مباشر بدل dynamic عشان نختبر
+                '@cf/meta/llama-3.2-1b-instruct', // ✅ النموذج الجديد المتوافق مع الخطة المجانية
                 {
                     messages: [
                         { role: 'system', content: systemPrompt },
@@ -283,7 +283,6 @@ ${knowledgeContext}
                 }
             );
         } catch (aiError) {
-            // لو فشل النموذج المباشر، نرجع الخطأ للمستخدم عشان نشخصه
             const errorMsg = (aiError as Error).message || 'خطأ غير معروف';
             console.error('❌ AI Error:', errorMsg);
             return c.json({ 
@@ -329,7 +328,6 @@ ${knowledgeContext}
         return c.json({ answer });
     } catch (e) {
         console.error('❌ Ask error:', e);
-        // 🔥 هنا بنرجع سبب الخطأ الفعلي عشان نعرف المشكلة
         const errorMessage = (e as Error).message || 'خطأ غير معروف';
         return c.json({ 
             answer: `⚠️ **خطأ في النظام:** ${errorMessage}\n\nيرجى إرسال هذه الرسالة للمطور.` 
