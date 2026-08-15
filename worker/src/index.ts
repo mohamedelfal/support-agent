@@ -1,6 +1,5 @@
 // ============================================================
-// وكيل دعم عملاء - مع نظام جلسات وتأكيد قبل تنفيذ الأدوات
-// شامل: تحديث البريد، تتبع الطلب، إنشاء تذكرة دعم
+// وكيل دعم عملاء - مع نظام جلسات محسّن ومنع التعلق
 // ============================================================
 
 import { Hono } from 'hono';
@@ -173,7 +172,7 @@ app.get('/api/auth/me', async (c) => {
 });
 
 // ============================================================
-// 🎯 نظام الجلسات وإدارة التأكيدات
+// 🎯 نظام الجلسات
 // ============================================================
 
 async function createSession(db: D1Database, userId: string, action: string, step: string, data: any): Promise<string> {
@@ -235,7 +234,7 @@ function extractEmail(text: string): string | null {
 }
 
 // ============================================================
-// 🎯 أدوات التنفيذ الفعلية
+// 🎯 أدوات التنفيذ
 // ============================================================
 
 async function executeUpdateEmail(db: D1Database, userId: string, newEmail: string): Promise<string> {
@@ -261,7 +260,63 @@ async function executeCreateTicket(db: D1Database, userId: string, issue: string
 }
 
 // ============================================================
-// 🤖 نقطة /ask (مع نظام الجلسات والتأكيد)
+// 🧠 كشف النية (Intent Detection)
+// ============================================================
+
+function detectIntent(question: string): { action: string; hasEmail?: string; hasOrder?: string; isConfirmation?: boolean } {
+    const lower = question.toLowerCase();
+
+    // 1. كشف التأكيد أو الإلغاء
+    if (lower.includes('نعم') || lower.includes('yes') || lower.includes('موافق')) {
+        return { action: 'confirm' };
+    }
+    if (lower.includes('لا') || lower.includes('no') || lower.includes('إلغاء') || lower.includes('الغاء')) {
+        return { action: 'cancel' };
+    }
+
+    // 2. كشف البريد الإلكتروني
+    const email = extractEmail(question);
+    if (email) {
+        return { action: 'has_email', hasEmail: email };
+    }
+
+    // 3. كشف رقم الطلب
+    const order = extractNumber(question);
+    if (order) {
+        return { action: 'has_order', hasOrder: order };
+    }
+
+    // 4. كشف النية العامة
+    const isUpdateProfile =
+        question.includes('تحديث') &&
+        (question.includes('بريد') || question.includes('إيميل') || question.includes('ايميل') || question.includes('email') ||
+         question.includes('الإيميل') || question.includes('الايميل') || question.includes('تغيير') || question.includes('تعديل'));
+
+    if (isUpdateProfile) {
+        return { action: 'update_email' };
+    }
+
+    const isOrderQuery =
+        question.includes('طلب') || question.includes('شحنة') || question.includes('تتبع') ||
+        question.includes('Track') || question.includes('Order') || question.includes('طلبى') || question.includes('طلبي');
+
+    if (isOrderQuery) {
+        return { action: 'track_order' };
+    }
+
+    const isTicketRequest =
+        question.includes('تذكرة') || question.includes('شكوى') || question.includes('مشكلة') ||
+        question.includes('دعم') || question.includes('Ticket') || question.includes('ticket');
+
+    if (isTicketRequest) {
+        return { action: 'create_ticket' };
+    }
+
+    return { action: 'general' };
+}
+
+// ============================================================
+// 🤖 نقطة /ask
 // ============================================================
 
 app.post('/api/ask', async (c) => {
@@ -300,6 +355,7 @@ app.post('/api/ask', async (c) => {
 
         await cleanExpiredSessions(db);
         const activeSession = await getActiveSession(db, userId);
+        const intent = detectIntent(question);
 
         // ============================================================
         // 1. معالجة الجلسة النشطة
@@ -310,23 +366,54 @@ app.post('/api/ask', async (c) => {
             const action = session.action;
             const step = session.step;
 
-            // 1.1 تحديث البريد - تأكيد البريد الجديد
+            // 1.1 تحديث البريد - ننتظر البريد الجديد
             if (action === 'update_email' && step === 'awaiting_confirmation') {
-                const newEmail = extractEmail(question);
-                if (!newEmail) {
+                // إذا كان المستخدم يريد إلغاء الجلسة
+                if (intent.action === 'cancel') {
+                    await deleteSession(db, session.id);
                     return c.json({
-                        answer: '⚠️ يرجى كتابة البريد الإلكتروني الجديد بشكل صحيح (مثال: new@email.com).'
+                        answer: '👍 تم إلغاء تحديث البريد الإلكتروني. هل يمكنني مساعدتك بشيء آخر؟'
                     });
                 }
-                const verificationCode = Math.floor(100000 + Math.random() * 900000).toString();
-                await updateSessionStep(db, session.id, 'awaiting_code', { ...sessionData, newEmail, code: verificationCode });
+
+                // إذا كان المستخدم يريد شيئاً آخر (نية مختلفة)
+                if (intent.action !== 'has_email' && intent.action !== 'confirm') {
+                    // نلغي الجلسة ونبدأ من جديد
+                    await deleteSession(db, session.id);
+                    // نعيد معالجة السؤال كطلب جديد
+                    const newIntent = detectIntent(question);
+                    if (newIntent.action === 'update_email' || newIntent.action === 'track_order' || newIntent.action === 'create_ticket') {
+                        // سيتم معالجته في القسم 2
+                    } else {
+                        // سؤال عام
+                        return await handleGeneralQuestion(c, db, userId, question);
+                    }
+                }
+
+                // إذا كان البريد موجوداً
+                if (intent.action === 'has_email' && intent.hasEmail) {
+                    const verificationCode = Math.floor(100000 + Math.random() * 900000).toString();
+                    await updateSessionStep(db, session.id, 'awaiting_code', { newEmail: intent.hasEmail, code: verificationCode });
+                    return c.json({
+                        answer: `📧 تم استلام بريدك الإلكتروني الجديد: ${intent.hasEmail}. تم إرسال كود تحقق إلى بريدك القديم (محاكاة). الكود هو: ${verificationCode}. الرجاء إرسال الكود للتأكيد.`
+                    });
+                }
+
+                // إذا لم يكن هناك بريد صحيح
                 return c.json({
-                    answer: `📧 تم استلام بريدك الإلكتروني الجديد: ${newEmail}. تم إرسال كود تحقق إلى بريدك القديم (محاكاة). الكود هو: ${verificationCode}. الرجاء إرسال الكود للتأكيد.`
+                    answer: '⚠️ يرجى كتابة البريد الإلكتروني الجديد بشكل صحيح (مثال: new@email.com)، أو اكتب "إلغاء" للخروج.'
                 });
             }
 
-            // 1.2 تحديث البريد - تأكيد الكود
+            // 1.2 تحديث البريد - ننتظر الكود
             if (action === 'update_email' && step === 'awaiting_code') {
+                if (intent.action === 'cancel') {
+                    await deleteSession(db, session.id);
+                    return c.json({
+                        answer: '👍 تم إلغاء تحديث البريد الإلكتروني. هل يمكنني مساعدتك بشيء آخر؟'
+                    });
+                }
+
                 const enteredCode = question.trim();
                 const expectedCode = sessionData.code;
                 if (enteredCode === expectedCode) {
@@ -338,29 +425,47 @@ app.post('/api/ask', async (c) => {
                     return c.json({ answer: result });
                 } else {
                     return c.json({
-                        answer: `⚠️ الكود غير صحيح. الرجاء إعادة إرسال الكود الصحيح أو طلب تحديث جديد.`
+                        answer: `⚠️ الكود غير صحيح. الرجاء إعادة إرسال الكود الصحيح، أو اكتب "إلغاء" للخروج.`
                     });
                 }
             }
 
-            // 1.3 تتبع الطلب - تأكيد رقم الطلب
+            // 1.3 تتبع الطلب - ننتظر رقم الطلب
             if (action === 'track_order' && step === 'awaiting_confirmation') {
-                const orderNumber = extractNumber(question);
-                if (!orderNumber) {
+                if (intent.action === 'cancel') {
+                    await deleteSession(db, session.id);
                     return c.json({
-                        answer: '⚠️ يرجى كتابة رقم الطلب بشكل صحيح (أرقام فقط).'
+                        answer: '👍 تم إلغاء تتبع الطلب. هل يمكنني مساعدتك بشيء آخر؟'
                     });
                 }
-                await updateSessionStep(db, session.id, 'awaiting_final_confirm', { ...sessionData, orderNumber });
+
+                if (intent.action !== 'has_order' && intent.action !== 'confirm') {
+                    await deleteSession(db, session.id);
+                    return await handleGeneralQuestion(c, db, userId, question);
+                }
+
+                if (intent.action === 'has_order' && intent.hasOrder) {
+                    await updateSessionStep(db, session.id, 'awaiting_final_confirm', { orderNumber: intent.hasOrder });
+                    return c.json({
+                        answer: `🔍 هل رقم الطلب ${intent.hasOrder} هو الصحيح؟ الرجاء الرد بـ "نعم" أو "لا".`
+                    });
+                }
+
                 return c.json({
-                    answer: `🔍 هل رقم الطلب ${orderNumber} هو الصحيح؟ الرجاء الرد بـ "نعم" أو "لا".`
+                    answer: '📦 الرجاء كتابة رقم الطلب الذي ترغب في تتبعه (أرقام فقط).'
                 });
             }
 
             // 1.4 تتبع الطلب - التأكيد النهائي
             if (action === 'track_order' && step === 'awaiting_final_confirm') {
-                const isYes = question.includes('نعم') || question.includes('Yes') || question.includes('yes');
-                if (isYes) {
+                if (intent.action === 'cancel') {
+                    await deleteSession(db, session.id);
+                    return c.json({
+                        answer: '👍 تم إلغاء تتبع الطلب. هل يمكنني مساعدتك بشيء آخر؟'
+                    });
+                }
+
+                if (intent.action === 'confirm') {
                     const result = await executeTrackOrder(sessionData.orderNumber);
                     await deleteSession(db, session.id);
                     await db.prepare(
@@ -375,15 +480,22 @@ app.post('/api/ask', async (c) => {
                 }
             }
 
-            // 1.5 إنشاء تذكرة - تأكيد المشكلة
+            // 1.5 إنشاء تذكرة - ننتظر وصف المشكلة
             if (action === 'create_ticket' && step === 'awaiting_issue') {
-                // المستخدم يكتب وصف المشكلة
-                if (question.length < 5) {
+                if (intent.action === 'cancel') {
+                    await deleteSession(db, session.id);
                     return c.json({
-                        answer: '⚠️ الرجاء كتابة وصف أوضح للمشكلة التي تواجهها (على الأقل 5 أحرف).'
+                        answer: '👍 تم إلغاء إنشاء التذكرة. هل يمكنني مساعدتك بشيء آخر؟'
                     });
                 }
-                await updateSessionStep(db, session.id, 'awaiting_final_confirm', { ...sessionData, issue: question });
+
+                if (question.length < 5) {
+                    return c.json({
+                        answer: '⚠️ الرجاء كتابة وصف أوضح للمشكلة التي تواجهها (على الأقل 5 أحرف)، أو اكتب "إلغاء" للخروج.'
+                    });
+                }
+
+                await updateSessionStep(db, session.id, 'awaiting_final_confirm', { issue: question });
                 return c.json({
                     answer: `📌 هل تريد إنشاء تذكرة دعم بالمشكلة التالية:\n\n"${question}"\n\nالرجاء الرد بـ "نعم" أو "لا".`
                 });
@@ -391,8 +503,14 @@ app.post('/api/ask', async (c) => {
 
             // 1.6 إنشاء تذكرة - التأكيد النهائي
             if (action === 'create_ticket' && step === 'awaiting_final_confirm') {
-                const isYes = question.includes('نعم') || question.includes('Yes') || question.includes('yes');
-                if (isYes) {
+                if (intent.action === 'cancel') {
+                    await deleteSession(db, session.id);
+                    return c.json({
+                        answer: '👍 تم إلغاء إنشاء التذكرة. هل يمكنني مساعدتك بشيء آخر؟'
+                    });
+                }
+
+                if (intent.action === 'confirm') {
                     const result = await executeCreateTicket(db, userId, sessionData.issue);
                     await deleteSession(db, session.id);
                     await db.prepare(
@@ -409,18 +527,11 @@ app.post('/api/ask', async (c) => {
         }
 
         // ============================================================
-        // 2. بدء جلسات جديدة
+        // 2. بدء جلسات جديدة (بناءً على النية)
         // ============================================================
 
         // 2.1 تحديث البريد الإلكتروني
-        const email = extractEmail(question);
-        const isUpdateProfile =
-            question.includes('تحديث') &&
-            (question.includes('بريد') || question.includes('إيميل') || 
-             question.includes('ايميل') || question.includes('email') ||
-             question.includes('الإيميل') || question.includes('الايميل'));
-
-        if (isUpdateProfile) {
+        if (intent.action === 'update_email') {
             await createSession(db, userId, 'update_email', 'awaiting_confirmation', {});
             return c.json({
                 answer: '📧 الرجاء كتابة البريد الإلكتروني الجديد الذي ترغب في تحديثه.'
@@ -428,32 +539,15 @@ app.post('/api/ask', async (c) => {
         }
 
         // 2.2 تتبع الطلب
-        const isOrderQuery =
-            question.includes('طلب') ||
-            question.includes('شحنة') ||
-            question.includes('تتبع') ||
-            question.includes('Track') ||
-            question.includes('Order') ||
-            question.includes('طلبى') ||
-            question.includes('طلبي');
-
-        if (isOrderQuery) {
+        if (intent.action === 'track_order') {
             await createSession(db, userId, 'track_order', 'awaiting_confirmation', {});
             return c.json({
                 answer: '📦 الرجاء كتابة رقم الطلب الذي ترغب في تتبعه.'
             });
         }
 
-        // 🆕 2.3 إنشاء تذكرة دعم
-        const isTicketRequest =
-            question.includes('تذكرة') ||
-            question.includes('شكوى') ||
-            question.includes('مشكلة') ||
-            question.includes('دعم') ||
-            question.includes('Ticket') ||
-            question.includes('ticket');
-
-        if (isTicketRequest) {
+        // 2.3 إنشاء تذكرة دعم
+        if (intent.action === 'create_ticket') {
             await createSession(db, userId, 'create_ticket', 'awaiting_issue', {});
             return c.json({
                 answer: '📌 الرجاء كتابة وصف المشكلة التي تواجهها بالتفصيل.'
@@ -461,56 +555,71 @@ app.post('/api/ask', async (c) => {
         }
 
         // ============================================================
-        // 3. البحث عن سياسة في جدول المعرفة
+        // 3. معالجة الأسئلة العامة والسياسات
         // ============================================================
-        const words = question.split(' ').filter(w => w.length > 2);
-        let knowledgeAnswer = '';
-        let foundKnowledge = false;
 
-        for (const word of words) {
-            const knowledgeResults = await db.prepare(
-                `SELECT answer FROM knowledge 
-                 WHERE question LIKE ? OR keywords LIKE ? 
-                 LIMIT 1`
-            ).bind(`%${word}%`, `%${word}%`).all();
+        return await handleGeneralQuestion(c, db, userId, question);
 
-            if (knowledgeResults.results && knowledgeResults.results.length > 0) {
-                knowledgeAnswer = knowledgeResults.results[0].answer;
-                foundKnowledge = true;
-                break;
-            }
+    } catch (e) {
+        console.error('❌ Ask error:', e);
+        return c.json({
+            answer: '⚠️ عذراً، حدث خطأ في النظام. حاول مرة أخرى.'
+        }, 200);
+    }
+});
+
+// ============================================================
+// 🧠 دالة معالجة الأسئلة العامة
+// ============================================================
+
+async function handleGeneralQuestion(c: any, db: D1Database, userId: string, question: string) {
+    // البحث عن سياسة في جدول المعرفة
+    const words = question.split(' ').filter(w => w.length > 2);
+    let knowledgeAnswer = '';
+    let foundKnowledge = false;
+
+    for (const word of words) {
+        const knowledgeResults = await db.prepare(
+            `SELECT answer FROM knowledge 
+             WHERE question LIKE ? OR keywords LIKE ? 
+             LIMIT 1`
+        ).bind(`%${word}%`, `%${word}%`).all();
+
+        if (knowledgeResults.results && knowledgeResults.results.length > 0) {
+            knowledgeAnswer = knowledgeResults.results[0].answer;
+            foundKnowledge = true;
+            break;
         }
+    }
 
-        if (foundKnowledge) {
-            await db.prepare(
-                `INSERT INTO conversations (id, user_id, message, response, created_at) VALUES (?, ?, ?, ?, ?)`
-            ).bind(
-                crypto.randomUUID(),
-                userId,
-                question,
-                knowledgeAnswer,
-                new Date().toISOString()
-            ).run();
-            return c.json({ answer: knowledgeAnswer });
+    if (foundKnowledge) {
+        await db.prepare(
+            `INSERT INTO conversations (id, user_id, message, response, created_at) VALUES (?, ?, ?, ?, ?)`
+        ).bind(
+            crypto.randomUUID(),
+            userId,
+            question,
+            knowledgeAnswer,
+            new Date().toISOString()
+        ).run();
+        return c.json({ answer: knowledgeAnswer });
+    }
+
+    // جلب آخر 5 محادثات للسياق
+    const { results: history } = await db.prepare(
+        `SELECT message, response FROM conversations WHERE user_id = ? ORDER BY created_at DESC LIMIT 5`
+    ).bind(userId).all();
+
+    let contextText = '';
+    if (history && history.length > 0) {
+        const reversed = history.reverse();
+        contextText = 'المحادثات السابقة مع العميل:\n';
+        for (const record of reversed) {
+            contextText += `- سؤال: ${record.message}\n- رد: ${record.response}\n`;
         }
+    }
 
-        // ============================================================
-        // 4. الأسئلة العامة
-        // ============================================================
-        const { results: history } = await db.prepare(
-            `SELECT message, response FROM conversations WHERE user_id = ? ORDER BY created_at DESC LIMIT 5`
-        ).bind(userId).all();
-
-        let contextText = '';
-        if (history && history.length > 0) {
-            const reversed = history.reverse();
-            contextText = 'المحادثات السابقة مع العميل:\n';
-            for (const record of reversed) {
-                contextText += `- سؤال: ${record.message}\n- رد: ${record.response}\n`;
-            }
-        }
-
-        const systemPrompt = `أنت وكيل دعم فني محترف في شركة عالمية.
+    const systemPrompt = `أنت وكيل دعم فني محترف في شركة عالمية.
 
 تعليماتك الأساسية:
 - أجب باللغة العربية الفصحى فقط وبإجابة مختصرة وواضحة.
@@ -521,48 +630,41 @@ ${contextText ? `\n${contextText}\n` : ''}
 
 سؤال العميل: ${question}`;
 
-        let aiResponse;
-        try {
-            aiResponse = await c.env.AI.run(
-                '@cf/meta/llama-3.2-3b-instruct',
-                {
-                    messages: [
-                        { role: 'system', content: systemPrompt },
-                        { role: 'user', content: question }
-                    ],
-                    temperature: 0.7,
-                    max_tokens: 256,
-                }
-            );
-        } catch (aiError) {
-            console.error('❌ AI Error:', aiError);
-            return c.json({
-                answer: '⚠️ عذراً، حدث خطأ في الذكاء الاصطناعي. حاول مرة أخرى.'
-            }, 200);
-        }
-
-        let answer = (aiResponse as any).response || '⚠️ عذراً، لم أستطع معالجة طلبك.';
-        answer = answer.trim();
-
-        await db.prepare(
-            `INSERT INTO conversations (id, user_id, message, response, created_at) VALUES (?, ?, ?, ?, ?)`
-        ).bind(
-            crypto.randomUUID(),
-            userId,
-            question,
-            answer,
-            new Date().toISOString()
-        ).run();
-
-        return c.json({ answer });
-
-    } catch (e) {
-        console.error('❌ Ask error:', e);
+    let aiResponse;
+    try {
+        aiResponse = await c.env.AI.run(
+            '@cf/meta/llama-3.2-3b-instruct',
+            {
+                messages: [
+                    { role: 'system', content: systemPrompt },
+                    { role: 'user', content: question }
+                ],
+                temperature: 0.7,
+                max_tokens: 256,
+            }
+        );
+    } catch (aiError) {
+        console.error('❌ AI Error:', aiError);
         return c.json({
-            answer: '⚠️ عذراً، حدث خطأ في النظام. حاول مرة أخرى.'
+            answer: '⚠️ عذراً، حدث خطأ في الذكاء الاصطناعي. حاول مرة أخرى.'
         }, 200);
     }
-});
+
+    let answer = (aiResponse as any).response || '⚠️ عذراً، لم أستطع معالجة طلبك.';
+    answer = answer.trim();
+
+    await db.prepare(
+        `INSERT INTO conversations (id, user_id, message, response, created_at) VALUES (?, ?, ?, ?, ?)`
+    ).bind(
+        crypto.randomUUID(),
+        userId,
+        question,
+        answer,
+        new Date().toISOString()
+    ).run();
+
+    return c.json({ answer });
+}
 
 // ============================================================
 // 📜 جلب المحادثات السابقة
