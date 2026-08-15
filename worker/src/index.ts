@@ -1,5 +1,5 @@
 // ============================================================
-// وكيل دعم عملاء - الإصدار النهائي مع منع التكرار
+// وكيل دعم عملاء - مع الأدوات الأساسية (Tools)
 // ============================================================
 
 import { Hono } from 'hono';
@@ -172,7 +172,30 @@ app.get('/api/auth/me', async (c) => {
 });
 
 // ============================================================
-// 🤖 نقطة /ask (مع إعدادات منع التكرار)
+// 🎯 الأدوات (Tools) - إنشاء تذكرة
+// ============================================================
+async function createTicket(db: D1Database, userId: string, question: string): Promise<string> {
+    const ticketId = crypto.randomUUID();
+    const now = new Date().toISOString();
+    
+    await db.prepare(
+        `INSERT INTO tickets (id, user_id, issue, status, created_at) VALUES (?, ?, ?, ?, ?)`
+    ).bind(ticketId, userId, question, 'open', now).run();
+    
+    return `✅ تم إنشاء تذكرة رقم ${ticketId.slice(0, 8)}. سيقوم فريق الدعم بالرد خلال ٢٤ ساعة.`;
+}
+
+// ============================================================
+// 🎯 الأدوات (Tools) - الاستعلام عن حالة الطلب
+// ============================================================
+async function getOrderStatus(db: D1Database, userId: string, orderNumber: string): Promise<string> {
+    // نفترض وجود جدول orders (يمكن إضافته لاحقاً)
+    // حالياً نرد برد افتراضي
+    return `📦 الطلب رقم ${orderNumber} قيد التوصيل. من المتوقع وصوله خلال ٣ أيام عمل.`;
+}
+
+// ============================================================
+// 🤖 نقطة /ask (مع الأدوات)
 // ============================================================
 app.post('/api/ask', async (c) => {
     try {
@@ -209,7 +232,43 @@ app.post('/api/ask', async (c) => {
         }
 
         // ============================================================
-        // 1. البحث عن سياسة في جدول المعرفة (رد مباشر)
+        // 1. التحقق من الأدوات (Tools)
+        // ============================================================
+        
+        // 1.1 إنشاء تذكرة
+        if (question.includes('تذكرة') || question.includes('موظف') || question.includes('دعم بشري')) {
+            const result = await createTicket(db, userId, question);
+            await db.prepare(
+                `INSERT INTO conversations (id, user_id, message, response, created_at) VALUES (?, ?, ?, ?, ?)`
+            ).bind(
+                crypto.randomUUID(),
+                userId,
+                question,
+                result,
+                new Date().toISOString()
+            ).run();
+            return c.json({ answer: result });
+        }
+
+        // 1.2 الاستعلام عن طلب
+        const orderMatch = question.match(/طلب\s*[#]?(\w+)/i);
+        if (orderMatch) {
+            const orderNumber = orderMatch[1];
+            const result = await getOrderStatus(db, userId, orderNumber);
+            await db.prepare(
+                `INSERT INTO conversations (id, user_id, message, response, created_at) VALUES (?, ?, ?, ?, ?)`
+            ).bind(
+                crypto.randomUUID(),
+                userId,
+                question,
+                result,
+                new Date().toISOString()
+            ).run();
+            return c.json({ answer: result });
+        }
+
+        // ============================================================
+        // 2. البحث عن سياسة في جدول المعرفة (رد مباشر)
         // ============================================================
         const words = question.split(' ').filter(w => w.length > 2);
         let knowledgeAnswer = '';
@@ -243,7 +302,7 @@ app.post('/api/ask', async (c) => {
         }
 
         // ============================================================
-        // 2. جلب آخر 5 محادثات للسياق (الذاكرة عبر D1)
+        // 3. جلب آخر 5 محادثات للسياق (الذاكرة عبر D1)
         // ============================================================
         const { results: history } = await db.prepare(
             `SELECT message, response FROM conversations WHERE user_id = ? ORDER BY created_at DESC LIMIT 5`
@@ -259,16 +318,28 @@ app.post('/api/ask', async (c) => {
         }
 
         // ============================================================
-        // 3. بناء System Prompt
+        // 4. بناء System Prompt (مع إضافة تحسين عدم التكرار)
         // ============================================================
-        const systemPrompt = `أنت وكيل دعم فني. أجب بالعربية الفصحى فقط وبإجابة مختصرة (جملتين كحد أقصى). تنويع في الصياغة وعدم التكرار.
+        const systemPrompt = `أنت وكيل دعم فني محترف في شركة عالمية.
+
+**شخصيتك:**
+- ودود، مهذب، ومتفهم.
+- تقدم إجابات دقيقة، واضحة، ومتنوعة في الصياغة.
+- تتجنب تكرار نفس الكلمات أو العبارات.
+
+**تعليماتك الأساسية:**
+- أجب بالعربية الفصحى فقط وبإجابة مختصرة (جملتين كحد أقصى).
+- قدم إجابات متنوعة في الصياغة، وتجنب تكرار نفس الكلمات أو العبارات.
+- إذا كان السؤال يتعلق بسياسات الشركة (الشحن، الاسترجاع، الحساب)، استخدم المعلومات الرسمية.
+- إذا طلب العميل "تذكرة" أو "موظف بشري"، قم بإنشاء تذكرة له.
+- إذا أعطى رقم طلب، استعلم عن حالته.
 
 ${contextText ? `\n${contextText}\n` : ''}
 
 سؤال العميل: ${question}`;
 
         // ============================================================
-        // 4. استدعاء النموذج مع إعدادات منع التكرار
+        // 5. استدعاء النموذج مع إعدادات منع التكرار
         // ============================================================
         let response;
         try {
@@ -279,10 +350,10 @@ ${contextText ? `\n${contextText}\n` : ''}
                         { role: 'system', content: systemPrompt },
                         { role: 'user', content: question }
                     ],
-                    temperature: 0.7,          // ✅ زيادة الإبداع ومنع التكرار
+                    temperature: 0.7,
                     max_tokens: 256,
-                    top_p: 0.9,               // ✅ تحسين تنوع الاختيارات
-                    repetition_penalty: 1.1,  // ✅ منع تكرار الكلمات
+                    top_p: 0.9,
+                    repetition_penalty: 1.1,
                 }
             );
         } catch (aiError) {
@@ -294,7 +365,7 @@ ${contextText ? `\n${contextText}\n` : ''}
         }
 
         // ============================================================
-        // 5. استخراج الرد
+        // 6. استخراج الرد
         // ============================================================
         let answer = 
             response?.response ||
@@ -313,7 +384,7 @@ ${contextText ? `\n${contextText}\n` : ''}
         answer = answer.trim();
 
         // ============================================================
-        // 6. حفظ المحادثة في D1
+        // 7. حفظ المحادثة في D1
         // ============================================================
         await db.prepare(
             `INSERT INTO conversations (id, user_id, message, response, created_at) VALUES (?, ?, ?, ?, ?)`
