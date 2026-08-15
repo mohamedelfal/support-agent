@@ -1,6 +1,5 @@
 // ============================================================
-// وكيل دعم عملاء - الإصدار الحاسم النهائي
-// (فصل المهام: ردود فورية + استدعاء نظيف)
+// وكيل دعم عملاء - الإصدار النهائي (Llama 3.2 3B)
 // ============================================================
 
 import { Hono } from 'hono';
@@ -173,7 +172,7 @@ app.get('/api/auth/me', async (c) => {
 });
 
 // ============================================================
-// 🤖 الوكيل الذكي - الإصدار الحاسم
+// 🤖 الوكيل الذكي - الإصدار النهائي (Llama 3.2 3B)
 // ============================================================
 app.post('/api/ask', async (c) => {
     try {
@@ -210,99 +209,115 @@ app.post('/api/ask', async (c) => {
         }
 
         // ============================================================
-        // 1. البحث عن الكلمات المفتاحية للسياسات
+        // 1. جلب آخر 5 محادثات للسياق
         // ============================================================
-        const policyKeywords = ['شحن', 'توصيل', 'استرجاع', 'مرتجع', 'كلمة السر', 'باسورد', 'حساب', 'دفع', 'كارت', 'تحويل'];
+        const { results: history } = await db.prepare(
+            `SELECT message, response FROM conversations WHERE user_id = ? ORDER BY created_at DESC LIMIT 5`
+        ).bind(userId).all();
+
+        let contextText = '';
+        if (history && history.length > 0) {
+            const reversed = history.reverse();
+            contextText = 'المحادثات السابقة مع هذا العميل:\n';
+            for (const record of reversed) {
+                contextText += `- سؤال: ${record.message}\n- رد: ${record.response}\n`;
+            }
+        }
+
+        // ============================================================
+        // 2. البحث في المعرفة (فقط للأسئلة التي قد تتعلق بالسياسات)
+        // ============================================================
+        const policyKeywords = ['شحن', 'توصيل', 'استرجاع', 'مرتجع', 'كلمة السر', 'باسورد', 'حساب', 'دفع', 'كارت', 'تحويل', 'سياسة'];
         const isPolicyQuestion = policyKeywords.some(keyword => question.includes(keyword));
 
-        // ============================================================
-        // 2. إذا كان السؤال عن سياسة: نرد مباشرة من قاعدة المعرفة
-        // ============================================================
+        let knowledgeText = '';
+        let foundKnowledge = false;
+
         if (isPolicyQuestion) {
             const words = question.split(' ').filter(w => w.length > 2);
-            let knowledgeAnswer = '';
-            let found = false;
-
             for (const word of words) {
                 const knowledgeResults = await db.prepare(
-                    `SELECT answer FROM knowledge 
+                    `SELECT question, answer FROM knowledge 
                      WHERE question LIKE ? OR keywords LIKE ? 
                      LIMIT 1`
                 ).bind(`%${word}%`, `%${word}%`).all();
 
                 if (knowledgeResults.results && knowledgeResults.results.length > 0) {
-                    knowledgeAnswer = knowledgeResults.results[0].answer;
-                    found = true;
+                    const k = knowledgeResults.results[0];
+                    knowledgeText = `معلومة رسمية من سياسة الشركة:\nسؤال: ${k.question}\nجواب: ${k.answer}`;
+                    foundKnowledge = true;
                     break;
                 }
-            }
-
-            if (found) {
-                // نرد مباشرة من قاعدة المعرفة (بدون استدعاء النموذج)
-                const answer = knowledgeAnswer;
-                
-                // حفظ المحادثة
-                await db.prepare(
-                    `INSERT INTO conversations (id, user_id, message, response, created_at) VALUES (?, ?, ?, ?, ?)`
-                ).bind(
-                    crypto.randomUUID(),
-                    userId,
-                    question,
-                    answer,
-                    new Date().toISOString()
-                ).run();
-
-                return c.json({ answer });
-            } else {
-                // إذا لم نجد إجابة، نطلب تذكرة (بدون استدعاء النموذج)
-                const answer = '⚠️ عذراً، لا توجد إجابة رسمية لهذا السؤال في قاعدة المعرفة. يرجى كتابة "تذكرة" وسيقوم فريق الدعم بالرد عليك خلال ٢٤ ساعة.';
-                
-                await db.prepare(
-                    `INSERT INTO conversations (id, user_id, message, response, created_at) VALUES (?, ?, ?, ?, ?)`
-                ).bind(
-                    crypto.randomUUID(),
-                    userId,
-                    question,
-                    answer,
-                    new Date().toISOString()
-                ).run();
-
-                return c.json({ answer });
             }
         }
 
         // ============================================================
-        // 3. للسؤال العام (خارج السياسات): نستدعي النموذج بسياق نظيف تماماً
+        // 3. بناء System Prompt مع تعليمات دقيقة للمعرفة العامة
         // ============================================================
-        const systemPrompt = `أنت مساعد مفيد. أجب على سؤال المستخدم بأسلوب واضح ومباشر.
-لا تكرر نفس الجملة أكثر من مرة.
-رد باللغة العربية الفصحى.
-سؤال المستخدم: ${question}`;
+        let systemPrompt = '';
 
+        if (foundKnowledge) {
+            systemPrompt = `أنت وكيل دعم عملاء محترف في شركة عالمية.
+
+**تعليماتك الأساسية:**
+- استخدم المعلومة الرسمية من سياسة الشركة المقدمة لك في ردك.
+- يمكنك إعادة صياغة المعلومة بأسلوبك الخاص مع الحفاظ على المعنى الدقيق.
+- لا تذكر عبارة "من سياسة الشركة" في ردك، بل ادمج المعلومة بشكل طبيعي.
+- إذا كان السؤال يحتوي على جوانب إضافية خارج المعلومة، يمكنك الإجابة من معرفتك العامة.
+- رد دائماً باللغة العربية الفصحى بأسلوب مهذب وواضح ومفصل.
+
+${knowledgeText}
+
+${contextText ? `\n${contextText}` : ''}
+
+سؤال العميل: ${question}`;
+        } else {
+            systemPrompt = `أنت وكيل دعم عملاء محترف في شركة عالمية، ولديك معرفة واسعة في جميع المجالات.
+
+**تعليماتك:**
+- أجب على سؤال العميل بأفضل ما لديك من معرفة عامة ودقيقة.
+- قدم إجابات شاملة ومفصلة، مع شرح المصطلحات والمفاهيم عند الحاجة.
+- إذا كان السؤال يتعلق بسياسات الشركة (مثل الشحن، الاسترجاع، الحساب) ولا تعرف الإجابة الدقيقة، اعتذر واطلب من العميل التواصل مع الدعم البشري.
+- بالنسبة للأسئلة العامة والتقنية، أجب بحرية من معرفتك مع الحرص على الدقة.
+- إذا كان السؤال غير واضح، اطلب توضيحاً بأسلوب مهذب.
+- رد دائماً باللغة العربية الفصحى بأسلوب مهذب وواضح ومفصل.
+
+${contextText ? `\n${contextText}` : ''}
+
+سؤال العميل: ${question}`;
+        }
+
+        // ============================================================
+        // 4. استدعاء النموذج (Llama 3.2 3B - التوازن المثالي)
+        // ============================================================
         let response;
         try {
             response = await c.env.AI.run(
-                '@cf/meta/llama-3.2-1b-instruct',
+                '@cf/meta/llama-3.2-3b-instruct', // ✅ نموذج 3B المتوازن
                 {
                     messages: [
                         { role: 'system', content: systemPrompt },
                         { role: 'user', content: question }
                     ],
-                    temperature: 0.7,
-                    max_tokens: 500,
-                    top_p: 0.9,
-                    repetition_penalty: 1.2,
-                    frequency_penalty: 0.7,
+                    temperature: 0.7,          // ✅ أعلى قليلاً للإبداع والدقة
+                    max_tokens: 1024,          // ✅ زيادة الرموز للإجابات المفصلة
+                    top_p: 0.95,               // ✅ أفضل ممارسة لـ Top-P
+                    repetition_penalty: 1.15,  // ✅ منع التكرار بقوة معتدلة
+                    frequency_penalty: 0.6,    // ✅ تقليل تكرار الكلمات
+                    presence_penalty: 0.3,     // ✅ تشجيع التنوع في الموضوعات
                 }
             );
         } catch (aiError) {
             const errorMsg = (aiError as Error).message || 'خطأ غير معروف';
             console.error('❌ AI Error:', errorMsg);
             return c.json({ 
-                answer: '⚠️ عذراً، حدث خطأ في الذكاء الاصطناعي. يرجى المحاولة مرة أخرى.' 
+                answer: `⚠️ عذراً، حدث خطأ في الذكاء الاصطناعي. يرجى المحاولة مرة أخرى.` 
             }, 200);
         }
 
+        // ============================================================
+        // 5. استخراج الرد وتنظيفه
+        // ============================================================
         let answer = 
             response?.response ||
             response?.choices?.[0]?.message?.content ||
@@ -317,12 +332,14 @@ app.post('/api/ask', async (c) => {
             answer = '⚠️ عذراً، لم أستطع معالجة طلبك حالياً. حاول مرة أخرى.';
         }
 
-        // تنظيف الرد
+        // تنظيف الرد من أي بقايا تنسيقات
         answer = answer.replace(/\*\*الوكيل:\*\*/g, '').replace(/\*\*العميل:\*\*/g, '');
         answer = answer.replace(/الوكيل:/g, '').replace(/العميل:/g, '');
         answer = answer.trim();
 
-        // حفظ المحادثة
+        // ============================================================
+        // 6. حفظ المحادثة
+        // ============================================================
         await db.prepare(
             `INSERT INTO conversations (id, user_id, message, response, created_at) VALUES (?, ?, ?, ?, ?)`
         ).bind(
