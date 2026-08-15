@@ -29,12 +29,11 @@ jobs:
             echo "⚠️ Namespace might already exist or an error occurred. Continuing..."
           fi
       
-      # تثبيت الحزم (بما فيها الحزم الجديدة)
+      # تثبيت الحزم مع حل تعارضات التبعيات
       - name: Install dependencies
         run: |
           cd worker
-          npm install
-          npm install --save-dev wrangler@4
+          npm install --legacy-peer-deps
       
       - run: cd worker && npx wrangler deploy
         env:
