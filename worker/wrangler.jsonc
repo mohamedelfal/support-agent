@@ -26,7 +26,7 @@
   "exports": {
     "SupportAgent": {
       "type": "durable-object",
-      "storage": "sqlite"
+      "state": "deleted"
     }
   }
 }
