@@ -1,7 +1,6 @@
 /**
  * ============================================================
- * وكيل دعم عملاء - باستخدام AIChatAgent مع exports
- * 
+ * وكيل دعم عملاء - باستخدام AIChatAgent
  * يعتمد على أحدث ممارسات Cloudflare (أغسطس 2026)
  * ============================================================
  */
@@ -230,7 +229,7 @@ const createTicketTool = tool({
 });
 
 // ============================================================
-// ٦. وكيل AIChatAgent (مع exports)
+// ٦. وكيل AIChatAgent (كـ Durable Object)
 // ============================================================
 
 export class SupportAgent extends AIChatAgent<Env> {
@@ -285,7 +284,7 @@ export class SupportAgent extends AIChatAgent<Env> {
 }
 
 // ============================================================
-// ٧. نقطة /ask
+// ٧. نقطة /ask - استخدام Durable Object بشكل صحيح
 // ============================================================
 
 app.post('/api/ask', async (c) => {
@@ -312,8 +311,13 @@ app.post('/api/ask', async (c) => {
       return c.json({ error: 'Question too long (max 1000 chars)' }, 400);
     }
 
-    const agent = new SupportAgent(c.env as any, c.env);
+    // ✅ الطريقة الصحيحة: استخدام id الخاص بـ Durable Object
+    const agentId = `user-${userId}`;
+    const agent = c.env.SupportAgent.get(
+      c.env.SupportAgent.idFromName(agentId)
+    );
 
+    // ✅ استخدام fetch بدلاً من new مباشرة
     const body = JSON.stringify({
       messages: [{ role: 'user', content: question }],
     });
