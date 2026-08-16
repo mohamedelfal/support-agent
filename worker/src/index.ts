@@ -1,16 +1,7 @@
 /**
  * ============================================================
- * وكيل دعم عملاء - باستخدام AIChatAgent (الحل الرسمي)
- * 
- * يعتمد هذا الوكيل على إطار العمل الرسمي من Cloudflare
- * لإدارة المحادثات والأدوات بشكل احترافي.
- * 
- * الميزات:
- * - إدارة تلقائية للرسائل والسياق
- * - دعم كامل للأدوات (تحديث البريد، تتبع الطلب، إنشاء التذاكر)
- * - أدوات تتطلب موافقة المستخدم (Human-in-the-loop)
- * - استمرارية الحالة عبر Durable Objects
- * - تخزين المحادثات في SQLite
+ * وكيل دعم عملاء - إصدار احترافي مع نظام تشخيص متكامل
+ * يعتمد على أحدث ممارسات Cloudflare (أغسطس 2026)
  * ============================================================
  */
 
@@ -208,7 +199,6 @@ app.get('/api/auth/me', async (c) => {
 
 /**
  * أداة تحديث البريد الإلكتروني
- * تُستخدم عندما يطلب المستخدم تغيير بريده الإلكتروني
  */
 const updateEmailTool = tool({
   description: 'تحديث البريد الإلكتروني للمستخدم.',
@@ -226,7 +216,6 @@ const updateEmailTool = tool({
 
 /**
  * أداة تتبع الطلب
- * تُستخدم عندما يطلب المستخدم معرفة حالة طلبه
  */
 const trackOrderTool = tool({
   description: 'الحصول على حالة الطلب باستخدام رقم الطلب.',
@@ -239,8 +228,7 @@ const trackOrderTool = tool({
 });
 
 /**
- * أداة إنشاء تذكرة دعم (بدون execute)
- * هذه الأداة تتطلب موافقة المستخدم (Human-in-the-loop)
+ * أداة إنشاء تذكرة دعم (تتطلب موافقة المستخدم)
  */
 const createTicketTool = tool({
   description: 'إنشاء تذكرة دعم جديدة لمشكلة يواجهها العميل.',
@@ -250,7 +238,7 @@ const createTicketTool = tool({
 });
 
 // ============================================================
-// ٦. وكيل AIChatAgent
+// ٦. وكيل AIChatAgent مع نظام تشخيص متكامل
 // ============================================================
 
 export class SupportAgent extends AIChatAgent<Env> {
@@ -278,17 +266,50 @@ export class SupportAgent extends AIChatAgent<Env> {
 - أجب باللغة العربية الفصحى وبإجابة مختصرة وواضحة.
 - لا تختلق معلومات.`;
 
-    const result = streamText({
-      model: workersai('@cf/meta/llama-3.2-3b-instruct'),
-      messages: await convertToModelMessages(this.messages),
-      system: systemPrompt,
-      tools: tools,
-      maxSteps: 5,
-      temperature: 0.7,
-      max_tokens: 256,
-    });
+    try {
+      const result = streamText({
+        model: workersai('@cf/meta/llama-3.2-3b-instruct'),
+        messages: await convertToModelMessages(this.messages),
+        system: systemPrompt,
+        tools: tools,
+        maxSteps: 5,
+        temperature: 0.7,
+        max_tokens: 256,
+      });
 
-    return result.toUIMessageStreamResponse();
+      return result.toUIMessageStreamResponse();
+    } catch (error) {
+      // نظام التشخيص المتكامل
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      const errorStack = error instanceof Error ? error.stack : '';
+      
+      // تسجيل الخطأ في السجلات
+      console.error('❌ onChatMessage error:', {
+        message: errorMessage,
+        stack: errorStack,
+        userId: this.userId,
+        messages: this.messages
+      });
+
+      // إرجاع رد مفيد للمستخدم مع تفاصيل الخطأ للتصحيح
+      return new Response(
+        JSON.stringify({
+          messages: [
+            ...this.messages,
+            { 
+              role: 'assistant', 
+              content: `⚠️ حدث خطأ في معالجة طلبك.\n\n` +
+                       `📋 **تفاصيل الخطأ للتصحيح:**\n` +
+                       `- **النوع:** ${error.constructor.name}\n` +
+                       `- **الرسالة:** ${errorMessage}\n` +
+                       (errorStack ? `- **المكدس:** ${errorStack.split('\n').slice(0, 3).join('\n')}` : '') +
+                       `\n\nيرجى إرسال هذه التفاصيل لفريق الدعم.`
+            }
+          ]
+        }),
+        { headers: { 'Content-Type': 'application/json' } }
+      );
+    }
   }
 }
 
@@ -298,27 +319,46 @@ export class SupportAgent extends AIChatAgent<Env> {
 
 app.post('/api/ask', async (c) => {
   try {
+    // 🔍 تسجيل كل طلب للتصحيح
+    console.log('📥 New request received');
+
     const auth = c.req.header('Authorization');
-    if (!auth) return c.json({ error: 'Unauthorized' }, 401);
+    if (!auth) {
+      console.warn('⚠️ Missing Authorization header');
+      return c.json({ error: 'Unauthorized' }, 401);
+    }
 
     const token = auth.replace('Bearer ', '');
     const payload = await verify(token, c.env.JWT_SECRET, 'HS256');
-    if (!payload.sub) return c.json({ error: 'Invalid token' }, 401);
+    if (!payload.sub) {
+      console.warn('⚠️ Invalid token payload');
+      return c.json({ error: 'Invalid token' }, 401);
+    }
 
     const userId = payload.sub;
+    console.log(`👤 User ID: ${userId}`);
 
     const db = c.env.DB;
     const user = await db
       .prepare('SELECT id FROM users WHERE id = ?')
       .bind(userId)
       .first();
-    if (!user) return c.json({ error: 'User not found' }, 404);
+    if (!user) {
+      console.warn(`⚠️ User not found: ${userId}`);
+      return c.json({ error: 'User not found' }, 404);
+    }
 
     const { question } = await c.req.json();
-    if (!question) return c.json({ error: 'Question required' }, 400);
+    if (!question) {
+      console.warn('⚠️ Missing question');
+      return c.json({ error: 'Question required' }, 400);
+    }
     if (question.length > 1000) {
+      console.warn(`⚠️ Question too long: ${question.length} chars`);
       return c.json({ error: 'Question too long (max 1000 chars)' }, 400);
     }
+
+    console.log(`💬 Question: ${question.substring(0, 50)}...`);
 
     const agent = new SupportAgent(c.env, userId);
 
@@ -337,6 +377,8 @@ app.post('/api/ask', async (c) => {
     let answer = data?.messages?.[data.messages.length - 1]?.content || 'عذراً، لم أستطع معالجة طلبك.';
     answer = answer.trim();
 
+    console.log(`✅ Response sent: ${answer.substring(0, 50)}...`);
+
     await db
       .prepare(
         'INSERT INTO conversations (id, user_id, message, response, created_at) VALUES (?, ?, ?, ?, ?)'
@@ -352,10 +394,15 @@ app.post('/api/ask', async (c) => {
 
     return c.json({ answer });
   } catch (e) {
-    console.error('❌ Ask error:', e);
+    const error = e as Error;
+    console.error('❌ Ask error:', {
+      message: error.message,
+      stack: error.stack,
+    });
+
     return c.json(
       {
-        answer: '⚠️ عذراً، حدث خطأ في النظام. حاول مرة أخرى.',
+        answer: `⚠️ حدث خطأ في النظام.\n\n📋 **تفاصيل الخطأ للتصحيح:**\n- **النوع:** ${error.constructor.name}\n- **الرسالة:** ${error.message}`,
       },
       200
     );
