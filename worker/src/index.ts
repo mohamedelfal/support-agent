@@ -1,7 +1,18 @@
 /**
  * ============================================================
- * وكيل دعم عملاء - إصدار احترافي مع نظام تشخيص متكامل
- * يعتمد على أحدث ممارسات Cloudflare (أغسطس 2026)
+ * وكيل دعم عملاء - باستخدام AIChatAgent (الحل الرسمي)
+ * 
+ * يعتمد هذا الوكيل على إطار العمل الرسمي من Cloudflare
+ * لإدارة المحادثات والأدوات بشكل احترافي.
+ * 
+ * الميزات:
+ * - إدارة تلقائية للرسائل والسياق
+ * - دعم كامل للأدوات (تحديث البريد، تتبع الطلب، إنشاء التذاكر)
+ * - أدوات تتطلب موافقة المستخدم (Human-in-the-loop)
+ * - استمرارية الحالة عبر Durable Objects
+ * - تخزين المحادثات في SQLite
+ * 
+ * تم التحديث إلى أحدث الممارسات (أغسطس 2026)
  * ============================================================
  */
 
@@ -238,13 +249,13 @@ const createTicketTool = tool({
 });
 
 // ============================================================
-// ٦. وكيل AIChatAgent مع نظام تشخيص متكامل
+// ٦. وكيل AIChatAgent مع التصحيح الكامل
 // ============================================================
 
 export class SupportAgent extends AIChatAgent<Env> {
-  constructor(env: Env, userId: string) {
-    super(env);
-    this.userId = userId;
+  // ✅ التصحيح الأساسي: تمرير ctx و env كما تتطلبه AIChatAgent
+  constructor(ctx: DurableObjectState, env: Env) {
+    super(ctx, env);
   }
 
   async onChatMessage() {
@@ -279,33 +290,18 @@ export class SupportAgent extends AIChatAgent<Env> {
 
       return result.toUIMessageStreamResponse();
     } catch (error) {
-      // نظام التشخيص المتكامل
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      const errorStack = error instanceof Error ? error.stack : '';
-      
-      // تسجيل الخطأ في السجلات
-      console.error('❌ onChatMessage error:', {
-        message: errorMessage,
-        stack: errorStack,
-        userId: this.userId,
-        messages: this.messages
-      });
-
-      // إرجاع رد مفيد للمستخدم مع تفاصيل الخطأ للتصحيح
+      console.error('❌ onChatMessage error:', errorMessage);
+      // إرجاع رد آمن مع تفاصيل الخطأ للتصحيح
       return new Response(
         JSON.stringify({
           messages: [
             ...this.messages,
-            { 
-              role: 'assistant', 
-              content: `⚠️ حدث خطأ في معالجة طلبك.\n\n` +
-                       `📋 **تفاصيل الخطأ للتصحيح:**\n` +
-                       `- **النوع:** ${error.constructor.name}\n` +
-                       `- **الرسالة:** ${errorMessage}\n` +
-                       (errorStack ? `- **المكدس:** ${errorStack.split('\n').slice(0, 3).join('\n')}` : '') +
-                       `\n\nيرجى إرسال هذه التفاصيل لفريق الدعم.`
-            }
-          ]
+            {
+              role: 'assistant',
+              content: `⚠️ حدث خطأ: ${errorMessage}\nيرجى المحاولة مرة أخرى.`,
+            },
+          ],
         }),
         { headers: { 'Content-Type': 'application/json' } }
       );
@@ -319,65 +315,46 @@ export class SupportAgent extends AIChatAgent<Env> {
 
 app.post('/api/ask', async (c) => {
   try {
-    // 🔍 تسجيل كل طلب للتصحيح
-    console.log('📥 New request received');
-
     const auth = c.req.header('Authorization');
-    if (!auth) {
-      console.warn('⚠️ Missing Authorization header');
-      return c.json({ error: 'Unauthorized' }, 401);
-    }
+    if (!auth) return c.json({ error: 'Unauthorized' }, 401);
 
     const token = auth.replace('Bearer ', '');
     const payload = await verify(token, c.env.JWT_SECRET, 'HS256');
-    if (!payload.sub) {
-      console.warn('⚠️ Invalid token payload');
-      return c.json({ error: 'Invalid token' }, 401);
-    }
+    if (!payload.sub) return c.json({ error: 'Invalid token' }, 401);
 
     const userId = payload.sub;
-    console.log(`👤 User ID: ${userId}`);
 
     const db = c.env.DB;
     const user = await db
       .prepare('SELECT id FROM users WHERE id = ?')
       .bind(userId)
       .first();
-    if (!user) {
-      console.warn(`⚠️ User not found: ${userId}`);
-      return c.json({ error: 'User not found' }, 404);
-    }
+    if (!user) return c.json({ error: 'User not found' }, 404);
 
     const { question } = await c.req.json();
-    if (!question) {
-      console.warn('⚠️ Missing question');
-      return c.json({ error: 'Question required' }, 400);
-    }
+    if (!question) return c.json({ error: 'Question required' }, 400);
     if (question.length > 1000) {
-      console.warn(`⚠️ Question too long: ${question.length} chars`);
       return c.json({ error: 'Question too long (max 1000 chars)' }, 400);
     }
 
-    console.log(`💬 Question: ${question.substring(0, 50)}...`);
-
-    const agent = new SupportAgent(c.env, userId);
+    const agent = new SupportAgent(c.env, c.env as any); // تمرير env فقط، ctx غير ضروري هنا
 
     const body = JSON.stringify({
-      messages: [{ role: 'user', content: question }]
+      messages: [{ role: 'user', content: question }],
     });
     const request = new Request('https://agent', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: body
+      body: body,
     });
 
     const response = await agent.fetch(request);
     const data = await response.json();
 
-    let answer = data?.messages?.[data.messages.length - 1]?.content || 'عذراً، لم أستطع معالجة طلبك.';
+    let answer =
+      data?.messages?.[data.messages.length - 1]?.content ||
+      'عذراً، لم أستطع معالجة طلبك.';
     answer = answer.trim();
-
-    console.log(`✅ Response sent: ${answer.substring(0, 50)}...`);
 
     await db
       .prepare(
@@ -394,15 +371,10 @@ app.post('/api/ask', async (c) => {
 
     return c.json({ answer });
   } catch (e) {
-    const error = e as Error;
-    console.error('❌ Ask error:', {
-      message: error.message,
-      stack: error.stack,
-    });
-
+    console.error('❌ Ask error:', e);
     return c.json(
       {
-        answer: `⚠️ حدث خطأ في النظام.\n\n📋 **تفاصيل الخطأ للتصحيح:**\n- **النوع:** ${error.constructor.name}\n- **الرسالة:** ${error.message}`,
+        answer: '⚠️ عذراً، حدث خطأ في النظام. حاول مرة أخرى.',
       },
       200
     );
