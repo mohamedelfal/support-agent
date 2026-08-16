@@ -1,15 +1,15 @@
 /**
  * ============================================================
- * وكيل دعم عملاء - النسخة المحسّنة النهائية (v3.0)
- * 
+ * وكيل دعم عملاء - النسخة المحسّنة النهائية (v4.0)
+ *
  * تعتمد على أفضل ممارسات هندسة المطالبات وإدارة الحالة
  * وفقًا لأحدث وثائق Cloudflare (أغسطس 2026)
- * 
+ *
  * التحسينات الرئيسية:
- * - تحسين فهم السياق والتمييز بين النوايا المتشابهة
- * - تحسين التعامل مع الأخطاء الإملائية
- * - تحسين آلية التراجع والاعتراف بعدم المعرفة
- * - تحسين البحث في قاعدة المعرفة
+ * - تحسين فهم السياق المستمر عبر المحادثة.
+ * - فصل واضح بين "إنشاء تذكرة" و "تتبع الطلب".
+ * - جمع المعلومات اللازمة للتذكرة دون تكرار الأسئلة.
+ * - تحسين التعامل مع الأخطاء الإملائية وآلية التراجع.
  * ============================================================
  */
 
@@ -195,7 +195,7 @@ app.get('/api/auth/me', async (c) => {
 });
 
 // ============================================================
-// ٥. نظام الجلسات
+// ٥. نظام الجلسات والحالة المستمرة
 // ============================================================
 
 type SessionData = {
@@ -208,12 +208,18 @@ type SessionData = {
     | 'awaiting_ticket_issue'
     | 'awaiting_ticket_confirm'
     | 'awaiting_clarification';
+  // حالة مستمرة (Context) لتخزين المعلومات المجمعة
+  context: {
+    pendingGoal?: 'create_ticket' | 'track_order' | 'update_email' | null;
+    orderNumber?: string;
+    issueDescription?: string;
+    clarificationQuestion?: string;
+  };
   data: {
     newEmail?: string;
     verificationCode?: string;
     orderNumber?: string;
     ticketIssue?: string;
-    clarificationQuestion?: string;
   };
 };
 
@@ -313,13 +319,15 @@ function extractEmail(text: string): string | null {
   return match ? match[0] : null;
 }
 
-// دالة محسّنة للكشف عن النية مع تمييز أفضل بين تتبع الطلب والاستفسار عن سياسة الشحن
-function detectIntent(question: string): {
+function detectIntent(
+  question: string,
+  context: SessionData['context']
+): {
   type:
     | 'update_email'
     | 'update_profile'
     | 'track_order'
-    | 'shipping_policy' // نية جديدة للاستفسار عن سياسة الشحن
+    | 'shipping_policy'
     | 'create_ticket'
     | 'knowledge'
     | 'confirm'
@@ -361,23 +369,32 @@ function detectIntent(question: string): {
     }
   }
 
-  // 5. كشف تتبع الطلب (يتطلب وجود كلمة "تتبع" أو "رقم" مع "طلب")
+  // 5. كشف تتبع الطلب (يتميز بسياق "طلب التتبع" أو إذا كان الهدف السابق هو تتبع)
   const orderKeywords = ['طلب', 'شحنة', 'تتبع', 'Track', 'Order', 'طلبى', 'طلبي', 'شحن'];
   const isOrderQuery = orderKeywords.some(k => lower.includes(k));
-  // إذا كان السؤال عن "وقت وصول الطلب" أو "مدة الشحن"، فهذا ليس تتبعاً بل استفسار عن سياسة
   const shippingTimeKeywords = ['مدة', 'وقت', 'كم', 'متي', 'متى', 'يستغرق', 'استلام', 'توصيل', 'شحن', 'وصول'];
   const isShippingTimeQuery = shippingTimeKeywords.some(k => lower.includes(k));
+
+  // التحقق: إذا كان الهدف السابق هو "إنشاء تذكرة"، فلا نقوم بتحويل السؤال إلى تتبع إلا إذا كان صريحاً.
+  if (context.pendingGoal === 'create_ticket') {
+    // إذا كان السؤال يحتوي على "تتبع" أو "رقم الطلب" بشكل واضح، قد يكون تغيير نية.
+    if (lower.includes('تتبع') && isOrderQuery) {
+      return { type: 'track_order' };
+    }
+    // وإلا، اعتبره وصفاً للمشكلة (للتذكرة)
+    return { type: 'general' };
+  }
 
   if (isOrderQuery && !isShippingTimeQuery) {
     return { type: 'track_order' };
   }
 
-  // 6. كشف الاستفسار عن سياسة الشحن (وقت الوصول، مدة التوصيل)
+  // 6. كشف الاستفسار عن سياسة الشحن
   if (isShippingTimeQuery && (lower.includes('طلب') || lower.includes('شحن') || lower.includes('توصيل'))) {
     return { type: 'shipping_policy' };
   }
 
-  // 7. كشف إنشاء تذكرة
+  // 7. كشف إنشاء تذكرة (يتميز بطلب صريح أو إذا كان الهدف السابق هو إنشاء تذكرة)
   const ticketKeywords = ['تذكرة', 'شكوى', 'مشكلة', 'دعم', 'مساعدة'];
   if (ticketKeywords.some(k => lower.includes(k))) {
     return { type: 'create_ticket' };
@@ -441,10 +458,18 @@ function detectIntent(question: string): {
 // دالة محسّنة للتحقق من تغيير النية
 function isNewIntentRequiringCancel(
   currentStep: string,
-  intent: ReturnType<typeof detectIntent>
+  intent: ReturnType<typeof detectIntent>,
+  context: SessionData['context']
 ): boolean {
   if (intent.type === 'cancel') {
     return false;
+  }
+
+  // إذا كان الهدف السابق هو إنشاء تذكرة، ولا توجد نية جديدة صريحة، لا نلغي الجلسة.
+  if (context.pendingGoal === 'create_ticket') {
+    if (intent.type === 'general' || intent.type === 'knowledge') {
+      return false; // قد يكون وصفاً للمشكلة أو سؤالاً عاماً ضمن السياق
+    }
   }
 
   if (currentStep === 'awaiting_email' || currentStep === 'awaiting_code') {
@@ -505,7 +530,8 @@ async function executeTrackOrder(orderNumber: string): Promise<string> {
 async function executeCreateTicket(
   db: D1Database,
   userId: string,
-  issue: string
+  issue: string,
+  orderNumber?: string
 ): Promise<string> {
   const openTicket = await db
     .prepare('SELECT id FROM tickets WHERE user_id = ? AND status = "open" LIMIT 1')
@@ -518,11 +544,12 @@ async function executeCreateTicket(
 
   const ticketId = crypto.randomUUID();
   const now = new Date().toISOString();
+  const fullIssue = orderNumber ? `الطلب رقم ${orderNumber}: ${issue}` : issue;
   await db
     .prepare(
       'INSERT INTO tickets (id, user_id, issue, status, created_at) VALUES (?, ?, ?, ?, ?)'
     )
-    .bind(ticketId, userId, issue, 'open', now)
+    .bind(ticketId, userId, fullIssue, 'open', now)
     .run();
   return `✅ تم إنشاء تذكرة دعم برقم ${ticketId.slice(
     0,
@@ -560,8 +587,16 @@ app.post('/api/ask', async (c) => {
 
     await cleanExpiredSessions(db);
 
-    const intent = detectIntent(question);
+    // جلب الجلسة النشطة
     const activeSession = await getActiveSession(db, userId);
+    let currentContext: SessionData['context'] = { pendingGoal: null };
+
+    if (activeSession) {
+      currentContext = activeSession.data.context || { pendingGoal: null };
+    }
+
+    // كشف النية مع مراعاة السياق
+    const intent = detectIntent(question, currentContext);
 
     // 2.1 معالجة الإلغاء
     if (intent.type === 'cancel') {
@@ -576,43 +611,46 @@ app.post('/api/ask', async (c) => {
     // 2.2 معالجة النية الجديدة التي تبدأ جلسة جديدة
     const newIntentTypes: string[] = ['update_email', 'update_profile', 'track_order', 'create_ticket'];
     if (newIntentTypes.includes(intent.type)) {
+      // إذا كانت هناك جلسة نشطة، نلغيها (لأنها نية جديدة)
       if (activeSession) {
         await deleteSession(db, activeSession.id);
       }
 
+      const newSessionData: SessionData = {
+        step: 'idle',
+        context: { pendingGoal: intent.type as any },
+        data: {},
+      };
+
       if (intent.type === 'update_email') {
-        const sessionData: SessionData = { step: 'awaiting_email', data: {} };
-        await createSession(db, userId, sessionData);
+        newSessionData.step = 'awaiting_email';
+        const sessionId = await createSession(db, userId, newSessionData);
         return c.json({
           answer: '📧 الرجاء كتابة البريد الإلكتروني الجديد الذي ترغب في تحديثه.',
         });
       }
 
       if (intent.type === 'update_profile') {
-        const sessionData: SessionData = {
-          step: 'awaiting_clarification',
-          data: {
-            clarificationQuestion:
-              '📝 هل تقصد تحديث بريدك الإلكتروني، أم معلومات أخرى مثل الاسم أو رقم الهاتف؟',
-          },
-        };
-        await createSession(db, userId, sessionData);
+        newSessionData.step = 'awaiting_clarification';
+        newSessionData.context.clarificationQuestion =
+          '📝 هل تقصد تحديث بريدك الإلكتروني، أم معلومات أخرى مثل الاسم أو رقم الهاتف؟';
+        await createSession(db, userId, newSessionData);
         return c.json({
-          answer: sessionData.data.clarificationQuestion,
+          answer: newSessionData.context.clarificationQuestion,
         });
       }
 
       if (intent.type === 'track_order') {
-        const sessionData: SessionData = { step: 'awaiting_order', data: {} };
-        await createSession(db, userId, sessionData);
+        newSessionData.step = 'awaiting_order';
+        const sessionId = await createSession(db, userId, newSessionData);
         return c.json({
           answer: '📦 الرجاء كتابة رقم الطلب الذي ترغب في تتبعه (أرقام فقط).',
         });
       }
 
       if (intent.type === 'create_ticket') {
-        const sessionData: SessionData = { step: 'awaiting_ticket_issue', data: {} };
-        await createSession(db, userId, sessionData);
+        newSessionData.step = 'awaiting_ticket_issue';
+        const sessionId = await createSession(db, userId, newSessionData);
         return c.json({
           answer: '📌 الرجاء كتابة وصف المشكلة التي تواجهها بالتفصيل.',
         });
@@ -625,7 +663,7 @@ app.post('/api/ask', async (c) => {
       const sessionData = session.data;
       const currentStep = sessionData.step;
 
-      if (isNewIntentRequiringCancel(currentStep, intent)) {
+      if (isNewIntentRequiringCancel(currentStep, intent, currentContext)) {
         await deleteSession(db, session.id);
         if (intent.type === 'knowledge' || intent.type === 'shipping_policy') {
           return await handleKnowledgeQuestion(c, db, userId, question, intent.type);
@@ -643,7 +681,11 @@ app.post('/api/ask', async (c) => {
         const lower = question.toLowerCase();
         if (lower.includes('بريد') || lower.includes('إيميل') || lower.includes('ايميل')) {
           await deleteSession(db, session.id);
-          const newSessionData: SessionData = { step: 'awaiting_email', data: {} };
+          const newSessionData: SessionData = {
+            step: 'awaiting_email',
+            context: { pendingGoal: 'update_email' },
+            data: {},
+          };
           await createSession(db, userId, newSessionData);
           return c.json({
             answer: '📧 الرجاء كتابة البريد الإلكتروني الجديد الذي ترغب في تحديثه.',
@@ -743,8 +785,10 @@ app.post('/api/ask', async (c) => {
       }
 
       if (currentStep === 'awaiting_ticket_issue') {
+        // ✅ جمع وصف المشكلة وتخزينه في السياق
         if (question.length >= 5) {
           sessionData.step = 'awaiting_ticket_confirm';
+          sessionData.context.issueDescription = question;
           sessionData.data = { ticketIssue: question };
           await updateSession(db, session.id, sessionData);
           return c.json({
@@ -759,10 +803,14 @@ app.post('/api/ask', async (c) => {
 
       if (currentStep === 'awaiting_ticket_confirm') {
         if (intent.type === 'confirm') {
+          // ✅ استخدام الوصف المخزن في السياق
+          const issue = sessionData.context.issueDescription || sessionData.data.ticketIssue || 'مشكلة غير محددة';
+          const orderNumber = sessionData.context.orderNumber;
           const result = await executeCreateTicket(
             db,
             userId,
-            sessionData.data.ticketIssue!
+            issue,
+            orderNumber
           );
           await deleteSession(db, session.id);
           await db
