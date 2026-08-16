@@ -1,7 +1,9 @@
 /**
  * ============================================================
- * وكيل دعم عملاء - النسخة المحسّنة النهائية
- * مع تحسين System Prompt، كشف النية، وإدارة الجلسات
+ * وكيل دعم عملاء - النسخة المحسّنة النهائية (v2.0)
+ * 
+ * تعتمد على أفضل ممارسات هندسة المطالبات وإدارة الحالة
+ * وفقًا لأحدث وثائق Cloudflare (أغسطس 2026)
  * ============================================================
  */
 
@@ -199,13 +201,13 @@ type SessionData = {
     | 'awaiting_order_confirm'
     | 'awaiting_ticket_issue'
     | 'awaiting_ticket_confirm'
-    | 'awaiting_clarification'; // حالة جديدة لتوضيح النية
+    | 'awaiting_clarification';
   data: {
     newEmail?: string;
     verificationCode?: string;
     orderNumber?: string;
     ticketIssue?: string;
-    clarificationQuestion?: string; // السؤال الذي تم طرحه للتوضيح
+    clarificationQuestion?: string;
   };
 };
 
@@ -305,11 +307,10 @@ function extractEmail(text: string): string | null {
   return match ? match[0] : null;
 }
 
-// دالة كشف النية المحسّنة - مع تمييز أفضل بين "تحديث بياناتي" و "تحديث ايميلي"
 function detectIntent(question: string): {
   type:
     | 'update_email'
-    | 'update_profile' // نية جديدة لتحديث بيانات عامة
+    | 'update_profile'
     | 'track_order'
     | 'create_ticket'
     | 'knowledge'
@@ -334,7 +335,7 @@ function detectIntent(question: string): {
     return { type: 'confirm' };
   }
 
-  // 3. كشف تحديث البريد الإلكتروني (يجب أن يحتوي على كلمة تحديث/تغيير + بريد)
+  // 3. كشف تحديث البريد الإلكتروني
   const updateKeywords = ['تحديث', 'تغيير', 'تعديل', 'تبديل', 'تجديد'];
   const emailKeywords = ['بريد', 'إيميل', 'ايميل', 'email', 'الإيميل', 'الايميل'];
   const hasUpdate = updateKeywords.some(k => lower.includes(k));
@@ -344,7 +345,7 @@ function detectIntent(question: string): {
     return { type: 'update_email' };
   }
 
-  // 4. كشف تحديث بيانات عامة (بدون ذكر بريد)
+  // 4. كشف تحديث بيانات عامة
   if (hasUpdate && !hasEmail) {
     const profileKeywords = ['بيانات', 'حساب', 'معلومات', 'ملفي', 'بروفايل'];
     if (profileKeywords.some(k => lower.includes(k))) {
@@ -364,7 +365,7 @@ function detectIntent(question: string): {
     return { type: 'create_ticket' };
   }
 
-  // 7. كشف الأسئلة المعرفية (سياسات، معلومات عامة)
+  // 7. كشف الأسئلة المعرفية (محسّن)
   const knowledgeKeywords = [
     'سياسة',
     'استرجاع',
@@ -381,6 +382,12 @@ function detectIntent(question: string): {
     'ما هو',
     'ماذا يعني',
     'شرح',
+    'الذكاء الاصطناعي',
+    'ai',
+    'تحليل',
+    'بيانات',
+    'وزن',
+    'ذري',
   ];
   if (knowledgeKeywords.some(k => lower.includes(k))) {
     return { type: 'knowledge' };
@@ -408,19 +415,17 @@ function detectIntent(question: string): {
   return { type: 'general' };
 }
 
-// دالة للتحقق مما إذا كانت النية الجديدة تتطلب إلغاء الجلسة الحالية
+// دالة محسّنة للتحقق من تغيير النية
 function isNewIntentRequiringCancel(
   currentStep: string,
   intent: ReturnType<typeof detectIntent>
 ): boolean {
-  // إذا كانت النية إلغاء، يتم معالجتها بشكل منفصل
   if (intent.type === 'cancel') {
     return false;
   }
 
   // إذا كانت الجلسة في حالة انتظار بريد أو كود
   if (currentStep === 'awaiting_email' || currentStep === 'awaiting_code') {
-    // إذا كانت النية جديدة (غير provide_email أو provide_code أو confirm)
     const allowedIntents = ['provide_email', 'provide_code', 'confirm'];
     if (!allowedIntents.includes(intent.type)) {
       return true;
@@ -437,18 +442,17 @@ function isNewIntentRequiringCancel(
 
   // إذا كانت الجلسة في حالة انتظار وصف تذكرة أو تأكيد
   if (currentStep === 'awaiting_ticket_issue' || currentStep === 'awaiting_ticket_confirm') {
-    const allowedIntents = ['general', 'confirm']; // general لأن وصف التذكرة يمكن أن يكون أي نص
+    const allowedIntents = ['general', 'confirm'];
     if (intent.type === 'general') {
-      return false; // إذا كان السؤال عام، قد يكون وصف التذكرة
+      return false;
     }
     if (!allowedIntents.includes(intent.type)) {
       return true;
     }
   }
 
-  // إذا كانت الجلسة في حالة توضيح
   if (currentStep === 'awaiting_clarification') {
-    return true; // أي سؤال جديد يلغي جلسة التوضيح
+    return true;
   }
 
   return false;
@@ -552,12 +556,10 @@ app.post('/api/ask', async (c) => {
     // 2.2 معالجة النية الجديدة التي تبدأ جلسة جديدة
     const newIntentTypes: string[] = ['update_email', 'update_profile', 'track_order', 'create_ticket'];
     if (newIntentTypes.includes(intent.type)) {
-      // إذا كانت هناك جلسة نشطة، نلغيها
       if (activeSession) {
         await deleteSession(db, activeSession.id);
       }
 
-      // تحديث البريد
       if (intent.type === 'update_email') {
         const sessionData: SessionData = { step: 'awaiting_email', data: {} };
         await createSession(db, userId, sessionData);
@@ -566,7 +568,6 @@ app.post('/api/ask', async (c) => {
         });
       }
 
-      // تحديث بيانات عامة (بدون بريد) - نطلب توضيحاً
       if (intent.type === 'update_profile') {
         const sessionData: SessionData = {
           step: 'awaiting_clarification',
@@ -581,7 +582,6 @@ app.post('/api/ask', async (c) => {
         });
       }
 
-      // تتبع الطلب
       if (intent.type === 'track_order') {
         const sessionData: SessionData = { step: 'awaiting_order', data: {} };
         await createSession(db, userId, sessionData);
@@ -590,7 +590,6 @@ app.post('/api/ask', async (c) => {
         });
       }
 
-      // إنشاء تذكرة
       if (intent.type === 'create_ticket') {
         const sessionData: SessionData = { step: 'awaiting_ticket_issue', data: {} };
         await createSession(db, userId, sessionData);
@@ -606,29 +605,23 @@ app.post('/api/ask', async (c) => {
       const sessionData = session.data;
       const currentStep = sessionData.step;
 
-      // التحقق من تغيير النية
       if (isNewIntentRequiringCancel(currentStep, intent)) {
         await deleteSession(db, session.id);
-        // إذا كانت النية معرفية، نتعامل معها مباشرة
         if (intent.type === 'knowledge') {
           return await handleKnowledgeQuestion(c, db, userId, question);
         }
-        // إذا كانت النية عامة، نتعامل معها كسؤال عام
         if (intent.type === 'general') {
           return await handleGeneralQuestion(c, db, userId, question);
         }
-        // وإلا، نعيد معالجة السؤال كنية جديدة
         return c.json({
           answer: '👍 تم إلغاء العملية الحالية. كيف يمكنني مساعدتك؟',
         });
       }
 
       // معالجة الجلسة حسب الخطوة الحالية
-      // حالة توضيح النية
       if (currentStep === 'awaiting_clarification') {
         const lower = question.toLowerCase();
         if (lower.includes('بريد') || lower.includes('إيميل') || lower.includes('ايميل')) {
-          // المستخدم يريد تحديث البريد
           await deleteSession(db, session.id);
           const newSessionData: SessionData = { step: 'awaiting_email', data: {} };
           await createSession(db, userId, newSessionData);
@@ -647,7 +640,6 @@ app.post('/api/ask', async (c) => {
         }
       }
 
-      // تحديث البريد: انتظار البريد الجديد
       if (currentStep === 'awaiting_email') {
         if (intent.type === 'provide_email' && intent.data?.email) {
           const email = intent.data.email;
@@ -665,7 +657,6 @@ app.post('/api/ask', async (c) => {
         }
       }
 
-      // تحديث البريد: انتظار الكود
       if (currentStep === 'awaiting_code') {
         if (intent.type === 'provide_code' && intent.data?.code) {
           const entered = intent.data.code;
@@ -696,7 +687,6 @@ app.post('/api/ask', async (c) => {
         }
       }
 
-      // تتبع الطلب: انتظار رقم الطلب
       if (currentStep === 'awaiting_order') {
         if (intent.type === 'provide_order' && intent.data?.orderNumber) {
           const order = intent.data.orderNumber;
@@ -713,7 +703,6 @@ app.post('/api/ask', async (c) => {
         }
       }
 
-      // تتبع الطلب: التأكيد النهائي
       if (currentStep === 'awaiting_order_confirm') {
         if (intent.type === 'confirm') {
           const result = await executeTrackOrder(sessionData.data.orderNumber!);
@@ -733,7 +722,6 @@ app.post('/api/ask', async (c) => {
         }
       }
 
-      // إنشاء تذكرة: انتظار وصف المشكلة
       if (currentStep === 'awaiting_ticket_issue') {
         if (question.length >= 5) {
           sessionData.step = 'awaiting_ticket_confirm';
@@ -749,7 +737,6 @@ app.post('/api/ask', async (c) => {
         }
       }
 
-      // إنشاء تذكرة: التأكيد النهائي
       if (currentStep === 'awaiting_ticket_confirm') {
         if (intent.type === 'confirm') {
           const result = await executeCreateTicket(
@@ -778,12 +765,10 @@ app.post('/api/ask', async (c) => {
     // 3. الحالة العامة (بدون جلسة نشطة)
     // ============================================================
 
-    // 3.1 الأسئلة المعرفية
     if (intent.type === 'knowledge') {
       return await handleKnowledgeQuestion(c, db, userId, question);
     }
 
-    // 3.2 الأسئلة العامة
     return await handleGeneralQuestion(c, db, userId, question);
   } catch (e) {
     console.error('❌ Ask error:', e);
@@ -792,7 +777,7 @@ app.post('/api/ask', async (c) => {
 });
 
 // ============================================================
-// دالة معالجة الأسئلة المعرفية (محسّنة)
+// دالة معالجة الأسئلة المعرفية (محسّنة مع آلية للتراجع)
 // ============================================================
 async function handleKnowledgeQuestion(
   c: any,
@@ -800,7 +785,7 @@ async function handleKnowledgeQuestion(
   userId: string,
   question: string
 ) {
-  // البحث في قاعدة المعرفة
+  // 1. محاولة البحث في قاعدة المعرفة
   const words = question.split(' ').filter((w) => w.length > 2);
   let knowledgeAnswer = '';
   for (const word of words) {
@@ -826,7 +811,8 @@ async function handleKnowledgeQuestion(
     return c.json({ answer: knowledgeAnswer });
   }
 
-  // إذا لم نجد في المعرفة، نستخدم AI.run مع System Prompt محسّن
+  // 2. إذا لم نجد في المعرفة، نستخدم AI.run مع System Prompt محسّن
+  //    مع إضافة آلية للتراجع (Fallback) للاعتراف بعدم المعرفة
   return await handleGeneralQuestion(c, db, userId, question);
 }
 
@@ -839,7 +825,7 @@ async function handleGeneralQuestion(
   userId: string,
   question: string
 ) {
-  // جلب آخر 3 محادثات فقط للسياق (لتقليل التشتت)
+  // جلب آخر 3 محادثات فقط للسياق
   const history = await db
     .prepare(
       'SELECT message, response FROM conversations WHERE user_id = ? ORDER BY created_at DESC LIMIT 3'
@@ -857,16 +843,17 @@ async function handleGeneralQuestion(
   }
 
   // System Prompt محسّن وفق أفضل الممارسات
-  const systemPrompt = `أنت مساعد دعم فني لشركة تقنية، اسمك "ناصر". هدفك الأساسي هو مساعدة العملاء في حل مشكلاتهم بأسرع وقت ممكن.
+  const systemPrompt = `أنت مساعد دعم فني محترف لشركة تقنية، اسمك "ناصر". هدفك الأساسي هو مساعدة العملاء في حل مشكلاتهم بأسرع وقت ممكن.
 
 شخصيتك: ودود، محترف، ومباشر. استخدم اللغة العربية الفصحى البسيطة.
 
 قواعدك الأساسية:
 1. **كن موجزاً**: لا تزيد ردودك عن ٣ جمل، إلا إذا طلب العميل تفاصيل إضافية.
 2. **لا تكرر المعلومات**: إذا سبق وأن قدمت معلومات، لا تعيدها إلا إذا طُلب منك ذلك.
-3. **إذا كان السؤال عن سياسات الشركة**: استخدم المعلومات الرسمية من قاعدة المعرفة.
-4. **إذا لم تعرف الإجابة**: قل "لا أملك هذه المعلومة حالياً. هل يمكنني مساعدتك في شيء آخر؟"
-5. **حافظ على لهجة مهذبة ومحترفة**.
+3. **التعامل مع الأخطاء الإملائية**: إذا كان السؤال يحتوي على أخطاء إملائية، حاول فهم المعنى المقصود وقدم إجابة مفيدة.
+4. **آلية التراجع (Fallback)**: إذا لم تكن متأكداً من الإجابة، اعترف بذلك وقل "لا أملك هذه المعلومة حالياً. هل يمكنني مساعدتك في شيء آخر؟" بدلاً من التخمين.
+5. **إذا كان السؤال عن سياسات الشركة**: استخدم المعلومات الرسمية من قاعدة المعرفة.
+6. **حافظ على لهجة مهذبة ومحترفة**.
 
 ${context ? `\n${context}` : ''}
 
