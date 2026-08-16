@@ -1,18 +1,8 @@
 /**
  * ============================================================
- * وكيل دعم عملاء - باستخدام AIChatAgent (الحل الرسمي)
+ * وكيل دعم عملاء - باستخدام AIChatAgent مع exports
  * 
- * يعتمد هذا الوكيل على إطار العمل الرسمي من Cloudflare
- * لإدارة المحادثات والأدوات بشكل احترافي.
- * 
- * الميزات:
- * - إدارة تلقائية للرسائل والسياق
- * - دعم كامل للأدوات (تحديث البريد، تتبع الطلب، إنشاء التذاكر)
- * - أدوات تتطلب موافقة المستخدم (Human-in-the-loop)
- * - استمرارية الحالة عبر Durable Objects
- * - تخزين المحادثات في SQLite
- * 
- * تم التحديث إلى أحدث الممارسات (أغسطس 2026)
+ * يعتمد على أحدث ممارسات Cloudflare (أغسطس 2026)
  * ============================================================
  */
 
@@ -208,9 +198,6 @@ app.get('/api/auth/me', async (c) => {
 // ٥. أدوات التنفيذ
 // ============================================================
 
-/**
- * أداة تحديث البريد الإلكتروني
- */
 const updateEmailTool = tool({
   description: 'تحديث البريد الإلكتروني للمستخدم.',
   parameters: z.object({
@@ -225,9 +212,6 @@ const updateEmailTool = tool({
   },
 });
 
-/**
- * أداة تتبع الطلب
- */
 const trackOrderTool = tool({
   description: 'الحصول على حالة الطلب باستخدام رقم الطلب.',
   parameters: z.object({
@@ -238,9 +222,6 @@ const trackOrderTool = tool({
   },
 });
 
-/**
- * أداة إنشاء تذكرة دعم (تتطلب موافقة المستخدم)
- */
 const createTicketTool = tool({
   description: 'إنشاء تذكرة دعم جديدة لمشكلة يواجهها العميل.',
   parameters: z.object({
@@ -249,11 +230,10 @@ const createTicketTool = tool({
 });
 
 // ============================================================
-// ٦. وكيل AIChatAgent مع التصحيح الكامل
+// ٦. وكيل AIChatAgent (مع exports)
 // ============================================================
 
 export class SupportAgent extends AIChatAgent<Env> {
-  // ✅ التصحيح الأساسي: تمرير ctx و env كما تتطلبه AIChatAgent
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
   }
@@ -271,9 +251,6 @@ export class SupportAgent extends AIChatAgent<Env> {
 
 تعليماتك الأساسية:
 - استخدم الأدوات المتاحة عندما يطلب المستخدم ذلك.
-- إذا طلب المستخدم تحديث بريده، استخدم أداة updateEmail.
-- إذا طلب تتبع طلبه، استخدم أداة trackOrder.
-- إذا طلب إنشاء تذكرة دعم، استخدم أداة createTicket (ستتطلب موافقته).
 - أجب باللغة العربية الفصحى وبإجابة مختصرة وواضحة.
 - لا تختلق معلومات.`;
 
@@ -290,16 +267,14 @@ export class SupportAgent extends AIChatAgent<Env> {
 
       return result.toUIMessageStreamResponse();
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      console.error('❌ onChatMessage error:', errorMessage);
-      // إرجاع رد آمن مع تفاصيل الخطأ للتصحيح
+      console.error('❌ onChatMessage error:', error);
       return new Response(
         JSON.stringify({
           messages: [
             ...this.messages,
             {
               role: 'assistant',
-              content: `⚠️ حدث خطأ: ${errorMessage}\nيرجى المحاولة مرة أخرى.`,
+              content: `⚠️ حدث خطأ: ${(error as Error).message}`,
             },
           ],
         }),
@@ -310,7 +285,7 @@ export class SupportAgent extends AIChatAgent<Env> {
 }
 
 // ============================================================
-// ٧. نقطة /ask (المعالجة الرئيسية)
+// ٧. نقطة /ask
 // ============================================================
 
 app.post('/api/ask', async (c) => {
@@ -337,7 +312,7 @@ app.post('/api/ask', async (c) => {
       return c.json({ error: 'Question too long (max 1000 chars)' }, 400);
     }
 
-    const agent = new SupportAgent(c.env, c.env as any); // تمرير env فقط، ctx غير ضروري هنا
+    const agent = new SupportAgent(c.env as any, c.env);
 
     const body = JSON.stringify({
       messages: [{ role: 'user', content: question }],
