@@ -304,6 +304,19 @@ function extractEmail(text: string): string | null {
   return match ? match[0] : null;
 }
 
+// دالة محسّنة للكشف عن نية تحديث البريد
+function isUpdateEmailIntent(question: string): boolean {
+  const lower = question.toLowerCase();
+  // كلمات تشير إلى تحديث/تغيير البريد
+  const updateKeywords = ['تحديث', 'تغيير', 'تعديل', 'تبديل', 'تجديد', 'تغيير'];
+  const emailKeywords = ['بريد', 'إيميل', 'ايميل', 'email', 'الإيميل', 'الايميل'];
+  
+  const hasUpdate = updateKeywords.some(k => lower.includes(k));
+  const hasEmail = emailKeywords.some(k => lower.includes(k));
+  
+  return hasUpdate && hasEmail;
+}
+
 // ============================================================
 // ٧. التنفيذ الفعلي للأدوات
 // ============================================================
@@ -531,16 +544,15 @@ app.post('/api/ask', async (c) => {
     }
 
     // ============================================================
-    // ٨.٢ بدء جلسات جديدة (حالة idle)
+    // ٨.٢ بدء جلسات جديدة (حالة idle) - مع ترتيب الأولويات
     // ============================================================
 
-    // تحديث البريد الإلكتروني
-    const email = extractEmail(question);
-    const isUpdateProfile =
-      question.includes('تحديث') &&
-      (question.includes('بريد') || question.includes('إيميل') || question.includes('ايميل') || question.includes('email'));
-
-    if (email && isUpdateProfile) {
+    // ✅ الأولوية 1: تحديث البريد الإلكتروني (يأتي قبل التذكرة)
+    if (isUpdateEmailIntent(question)) {
+      // إذا كانت هناك جلسة قديمة، نحذفها
+      if (activeSession) {
+        await deleteSession(db, activeSession.id);
+      }
       const sessionData: SessionData = {
         step: 'awaiting_email',
         data: {},
@@ -551,15 +563,20 @@ app.post('/api/ask', async (c) => {
       });
     }
 
-    // تتبع الطلب
+    // ✅ الأولوية 2: تتبع الطلب
     const isOrderQuery =
       question.includes('طلب') ||
       question.includes('شحنة') ||
       question.includes('تتبع') ||
       question.includes('Track') ||
-      question.includes('Order');
+      question.includes('Order') ||
+      question.includes('طلبى') ||
+      question.includes('طلبي');
 
     if (isOrderQuery) {
+      if (activeSession) {
+        await deleteSession(db, activeSession.id);
+      }
       const sessionData: SessionData = {
         step: 'awaiting_order',
         data: {},
@@ -570,13 +587,17 @@ app.post('/api/ask', async (c) => {
       });
     }
 
-    // إنشاء تذكرة دعم
-    if (
+    // ✅ الأولوية 3: إنشاء تذكرة دعم
+    const isTicketRequest =
       question.includes('تذكرة') ||
       question.includes('شكوى') ||
       question.includes('مشكلة') ||
-      question.includes('دعم')
-    ) {
+      question.includes('دعم');
+
+    if (isTicketRequest) {
+      if (activeSession) {
+        await deleteSession(db, activeSession.id);
+      }
       const sessionData: SessionData = {
         step: 'awaiting_ticket_issue',
         data: {},
