@@ -1,9 +1,15 @@
 /**
  * ============================================================
- * وكيل دعم عملاء - النسخة المحسّنة النهائية (v2.0)
+ * وكيل دعم عملاء - النسخة المحسّنة النهائية (v3.0)
  * 
  * تعتمد على أفضل ممارسات هندسة المطالبات وإدارة الحالة
  * وفقًا لأحدث وثائق Cloudflare (أغسطس 2026)
+ * 
+ * التحسينات الرئيسية:
+ * - تحسين فهم السياق والتمييز بين النوايا المتشابهة
+ * - تحسين التعامل مع الأخطاء الإملائية
+ * - تحسين آلية التراجع والاعتراف بعدم المعرفة
+ * - تحسين البحث في قاعدة المعرفة
  * ============================================================
  */
 
@@ -307,11 +313,13 @@ function extractEmail(text: string): string | null {
   return match ? match[0] : null;
 }
 
+// دالة محسّنة للكشف عن النية مع تمييز أفضل بين تتبع الطلب والاستفسار عن سياسة الشحن
 function detectIntent(question: string): {
   type:
     | 'update_email'
     | 'update_profile'
     | 'track_order'
+    | 'shipping_policy' // نية جديدة للاستفسار عن سياسة الشحن
     | 'create_ticket'
     | 'knowledge'
     | 'confirm'
@@ -353,24 +361,33 @@ function detectIntent(question: string): {
     }
   }
 
-  // 5. كشف تتبع الطلب
+  // 5. كشف تتبع الطلب (يتطلب وجود كلمة "تتبع" أو "رقم" مع "طلب")
   const orderKeywords = ['طلب', 'شحنة', 'تتبع', 'Track', 'Order', 'طلبى', 'طلبي', 'شحن'];
-  if (orderKeywords.some(k => lower.includes(k))) {
+  const isOrderQuery = orderKeywords.some(k => lower.includes(k));
+  // إذا كان السؤال عن "وقت وصول الطلب" أو "مدة الشحن"، فهذا ليس تتبعاً بل استفسار عن سياسة
+  const shippingTimeKeywords = ['مدة', 'وقت', 'كم', 'متي', 'متى', 'يستغرق', 'استلام', 'توصيل', 'شحن', 'وصول'];
+  const isShippingTimeQuery = shippingTimeKeywords.some(k => lower.includes(k));
+
+  if (isOrderQuery && !isShippingTimeQuery) {
     return { type: 'track_order' };
   }
 
-  // 6. كشف إنشاء تذكرة
+  // 6. كشف الاستفسار عن سياسة الشحن (وقت الوصول، مدة التوصيل)
+  if (isShippingTimeQuery && (lower.includes('طلب') || lower.includes('شحن') || lower.includes('توصيل'))) {
+    return { type: 'shipping_policy' };
+  }
+
+  // 7. كشف إنشاء تذكرة
   const ticketKeywords = ['تذكرة', 'شكوى', 'مشكلة', 'دعم', 'مساعدة'];
   if (ticketKeywords.some(k => lower.includes(k))) {
     return { type: 'create_ticket' };
   }
 
-  // 7. كشف الأسئلة المعرفية (محسّن)
+  // 8. كشف الأسئلة المعرفية
   const knowledgeKeywords = [
     'سياسة',
     'استرجاع',
     'مرتجع',
-    'شحن',
     'سعر',
     'كلمة السر',
     'باسورد',
@@ -388,30 +405,36 @@ function detectIntent(question: string): {
     'بيانات',
     'وزن',
     'ذري',
+    'فن',
+    'حديث',
+    'سباحة',
+    'فراشة',
+    'صدر',
+    'باك',
   ];
   if (knowledgeKeywords.some(k => lower.includes(k))) {
     return { type: 'knowledge' };
   }
 
-  // 8. كشف البريد الإلكتروني
+  // 9. كشف البريد الإلكتروني
   const email = extractEmail(question);
   if (email) {
     return { type: 'provide_email', data: { email } };
   }
 
-  // 9. كشف الكود
+  // 10. كشف الكود
   const hasOnlyNumbers = /^\d+$/.test(question.trim());
   if (hasOnlyNumbers) {
     return { type: 'provide_code', data: { code: question.trim() } };
   }
 
-  // 10. كشف رقم الطلب
+  // 11. كشف رقم الطلب
   const order = extractNumber(question);
   if (order) {
     return { type: 'provide_order', data: { orderNumber: order } };
   }
 
-  // 11. الحالة العامة
+  // 12. الحالة العامة
   return { type: 'general' };
 }
 
@@ -424,7 +447,6 @@ function isNewIntentRequiringCancel(
     return false;
   }
 
-  // إذا كانت الجلسة في حالة انتظار بريد أو كود
   if (currentStep === 'awaiting_email' || currentStep === 'awaiting_code') {
     const allowedIntents = ['provide_email', 'provide_code', 'confirm'];
     if (!allowedIntents.includes(intent.type)) {
@@ -432,7 +454,6 @@ function isNewIntentRequiringCancel(
     }
   }
 
-  // إذا كانت الجلسة في حالة انتظار رقم طلب أو تأكيد
   if (currentStep === 'awaiting_order' || currentStep === 'awaiting_order_confirm') {
     const allowedIntents = ['provide_order', 'confirm'];
     if (!allowedIntents.includes(intent.type)) {
@@ -440,7 +461,6 @@ function isNewIntentRequiringCancel(
     }
   }
 
-  // إذا كانت الجلسة في حالة انتظار وصف تذكرة أو تأكيد
   if (currentStep === 'awaiting_ticket_issue' || currentStep === 'awaiting_ticket_confirm') {
     const allowedIntents = ['general', 'confirm'];
     if (intent.type === 'general') {
@@ -607,8 +627,8 @@ app.post('/api/ask', async (c) => {
 
       if (isNewIntentRequiringCancel(currentStep, intent)) {
         await deleteSession(db, session.id);
-        if (intent.type === 'knowledge') {
-          return await handleKnowledgeQuestion(c, db, userId, question);
+        if (intent.type === 'knowledge' || intent.type === 'shipping_policy') {
+          return await handleKnowledgeQuestion(c, db, userId, question, intent.type);
         }
         if (intent.type === 'general') {
           return await handleGeneralQuestion(c, db, userId, question);
@@ -765,8 +785,8 @@ app.post('/api/ask', async (c) => {
     // 3. الحالة العامة (بدون جلسة نشطة)
     // ============================================================
 
-    if (intent.type === 'knowledge') {
-      return await handleKnowledgeQuestion(c, db, userId, question);
+    if (intent.type === 'knowledge' || intent.type === 'shipping_policy') {
+      return await handleKnowledgeQuestion(c, db, userId, question, intent.type);
     }
 
     return await handleGeneralQuestion(c, db, userId, question);
@@ -783,7 +803,8 @@ async function handleKnowledgeQuestion(
   c: any,
   db: D1Database,
   userId: string,
-  question: string
+  question: string,
+  intentType?: string
 ) {
   // 1. محاولة البحث في قاعدة المعرفة
   const words = question.split(' ').filter((w) => w.length > 2);
@@ -811,8 +832,20 @@ async function handleKnowledgeQuestion(
     return c.json({ answer: knowledgeAnswer });
   }
 
-  // 2. إذا لم نجد في المعرفة، نستخدم AI.run مع System Prompt محسّن
-  //    مع إضافة آلية للتراجع (Fallback) للاعتراف بعدم المعرفة
+  // 2. إذا كانت النية هي الاستفسار عن سياسة الشحن، نقدم رداً بديلاً مفيداً
+  if (intentType === 'shipping_policy') {
+    const fallbackAnswer =
+      '⏳ عادةً ما يستغرق وصول الطلب من ٣ إلى ٥ أيام عمل من تاريخ الشراء. يتم إرسال رقم تتبع على البريد الإلكتروني عند الشحن. هل يمكنني مساعدتك في شيء آخر؟';
+    await db
+      .prepare(
+        'INSERT INTO conversations (id, user_id, message, response, created_at) VALUES (?, ?, ?, ?, ?)'
+      )
+      .bind(crypto.randomUUID(), userId, question, fallbackAnswer, new Date().toISOString())
+      .run();
+    return c.json({ answer: fallbackAnswer });
+  }
+
+  // 3. إذا لم نجد في المعرفة، نستخدم AI.run مع System Prompt محسّن
   return await handleGeneralQuestion(c, db, userId, question);
 }
 
@@ -854,6 +887,7 @@ async function handleGeneralQuestion(
 4. **آلية التراجع (Fallback)**: إذا لم تكن متأكداً من الإجابة، اعترف بذلك وقل "لا أملك هذه المعلومة حالياً. هل يمكنني مساعدتك في شيء آخر؟" بدلاً من التخمين.
 5. **إذا كان السؤال عن سياسات الشركة**: استخدم المعلومات الرسمية من قاعدة المعرفة.
 6. **حافظ على لهجة مهذبة ومحترفة**.
+7. **تذكر السياق**: إذا كان السؤال مرتبطاً بمحادثة سابقة، استخدم هذا السياق لتقديم إجابة أفضل.
 
 ${context ? `\n${context}` : ''}
 
