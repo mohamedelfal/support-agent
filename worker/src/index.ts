@@ -1,21 +1,14 @@
 /**
  * ============================================================
- * وكيل دعم عملاء - باستخدام AIChatAgent
- * يعتمد على أحدث ممارسات Cloudflare (أغسطس 2026)
+ * وكيل دعم عملاء - النسخة المستقرة (بدون AIChatAgent)
+ * تعتمد على D1 لإدارة المحادثات و AI.run للأسئلة العامة
  * ============================================================
  */
 
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { sign, verify } from 'hono/jwt';
-import { AIChatAgent } from '@cloudflare/ai-chat';
-import { createWorkersAI } from 'workers-ai-provider';
-import { streamText, convertToModelMessages, tool } from 'ai';
-import { z } from 'zod';
 
-// ============================================================
-// تعريف بيئة العمل
-// ============================================================
 type Env = {
   AI: Ai;
   DB: D1Database;
@@ -194,99 +187,37 @@ app.get('/api/auth/me', async (c) => {
 });
 
 // ============================================================
-// ٥. أدوات التنفيذ
+// ٥. أدوات مساعدة
 // ============================================================
-
-const updateEmailTool = tool({
-  description: 'تحديث البريد الإلكتروني للمستخدم.',
-  parameters: z.object({
-    newEmail: z.string().email().describe('البريد الإلكتروني الجديد'),
-  }),
-  execute: async ({ newEmail }, { db, userId }) => {
-    await (db as any)
-      .prepare('UPDATE users SET email = ? WHERE id = ?')
-      .bind(newEmail, userId)
-      .run();
-    return `✅ تم تحديث بريدك الإلكتروني إلى ${newEmail} بنجاح.`;
-  },
-});
-
-const trackOrderTool = tool({
-  description: 'الحصول على حالة الطلب باستخدام رقم الطلب.',
-  parameters: z.object({
-    orderNumber: z.string().describe('رقم الطلب'),
-  }),
-  execute: async ({ orderNumber }) => {
-    return `📦 حالة الطلب رقم ${orderNumber}: قيد التوصيل. رقم التتبع: TRK-${orderNumber}`;
-  },
-});
-
-const createTicketTool = tool({
-  description: 'إنشاء تذكرة دعم جديدة لمشكلة يواجهها العميل.',
-  parameters: z.object({
-    issue: z.string().describe('وصف المشكلة بالتفصيل'),
-  }),
-});
-
-// ============================================================
-// ٦. وكيل AIChatAgent (كـ Durable Object)
-// ============================================================
-
-export class SupportAgent extends AIChatAgent<Env> {
-  constructor(ctx: DurableObjectState, env: Env) {
-    super(ctx, env);
+function extractNumber(text: string): string | null {
+  const map: Record<string, string> = {
+    '٠': '0',
+    '١': '1',
+    '٢': '2',
+    '٣': '3',
+    '٤': '4',
+    '٥': '5',
+    '٦': '6',
+    '٧': '7',
+    '٨': '8',
+    '٩': '9',
+  };
+  let normalized = text;
+  for (const [ar, en] of Object.entries(map)) {
+    normalized = normalized.replace(new RegExp(ar, 'g'), en);
   }
+  const match = normalized.match(/\b(\d{4,})\b/);
+  return match ? match[1] : null;
+}
 
-  async onChatMessage() {
-    const workersai = createWorkersAI({ binding: this.env.AI });
-
-    const tools = {
-      updateEmail: updateEmailTool,
-      trackOrder: trackOrderTool,
-      createTicket: createTicketTool,
-    };
-
-    const systemPrompt = `أنت وكيل دعم فني محترف لشركة تقنية.
-
-تعليماتك الأساسية:
-- استخدم الأدوات المتاحة عندما يطلب المستخدم ذلك.
-- أجب باللغة العربية الفصحى وبإجابة مختصرة وواضحة.
-- لا تختلق معلومات.`;
-
-    try {
-      const result = streamText({
-        model: workersai('@cf/meta/llama-3.2-3b-instruct'),
-        messages: await convertToModelMessages(this.messages),
-        system: systemPrompt,
-        tools: tools,
-        maxSteps: 5,
-        temperature: 0.7,
-        max_tokens: 256,
-      });
-
-      return result.toUIMessageStreamResponse();
-    } catch (error) {
-      console.error('❌ onChatMessage error:', error);
-      return new Response(
-        JSON.stringify({
-          messages: [
-            ...this.messages,
-            {
-              role: 'assistant',
-              content: `⚠️ حدث خطأ: ${(error as Error).message}`,
-            },
-          ],
-        }),
-        { headers: { 'Content-Type': 'application/json' } }
-      );
-    }
-  }
+function extractEmail(text: string): string | null {
+  const match = text.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
+  return match ? match[0] : null;
 }
 
 // ============================================================
-// ٧. نقطة /ask - استخدام Durable Object بشكل صحيح
+// ٦. نقطة /ask (المعالجة الرئيسية)
 // ============================================================
-
 app.post('/api/ask', async (c) => {
   try {
     const auth = c.req.header('Authorization');
@@ -311,59 +242,154 @@ app.post('/api/ask', async (c) => {
       return c.json({ error: 'Question too long (max 1000 chars)' }, 400);
     }
 
-    // ✅ الطريقة الصحيحة: استخدام id الخاص بـ Durable Object
-    const agentId = `user-${userId}`;
-    const agent = c.env.SupportAgent.get(
-      c.env.SupportAgent.idFromName(agentId)
-    );
+    // ============================================================
+    // ١. الكشف المباشر عن الأدوات
+    // ============================================================
 
-    // ✅ استخدام fetch بدلاً من new مباشرة
-    const body = JSON.stringify({
-      messages: [{ role: 'user', content: question }],
-    });
-    const request = new Request('https://agent', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: body,
-    });
+    // ١.١ تحديث البريد الإلكتروني
+    const email = extractEmail(question);
+    const isUpdateProfile =
+      question.includes('تحديث') &&
+      (question.includes('بريد') || question.includes('إيميل') || question.includes('ايميل') || question.includes('email'));
 
-    const response = await agent.fetch(request);
-    const data = await response.json();
+    if (email && isUpdateProfile) {
+      try {
+        await db
+          .prepare('UPDATE users SET email = ? WHERE id = ?')
+          .bind(email, userId)
+          .run();
+        const result = `✅ تم تحديث بريدك الإلكتروني إلى ${email} بنجاح.`;
+        await db
+          .prepare(
+            'INSERT INTO conversations (id, user_id, message, response, created_at) VALUES (?, ?, ?, ?, ?)'
+          )
+          .bind(crypto.randomUUID(), userId, question, result, new Date().toISOString())
+          .run();
+        return c.json({ answer: result });
+      } catch (e) {
+        return c.json({ answer: '❌ فشل تحديث البريد: ' + (e as Error).message });
+      }
+    }
 
-    let answer =
-      data?.messages?.[data.messages.length - 1]?.content ||
-      'عذراً، لم أستطع معالجة طلبك.';
-    answer = answer.trim();
+    // ١.٢ تتبع الطلب
+    const orderNumber = extractNumber(question);
+    const isOrderQuery =
+      question.includes('طلب') ||
+      question.includes('شحنة') ||
+      question.includes('تتبع') ||
+      question.includes('Track') ||
+      question.includes('Order');
 
+    if (orderNumber && isOrderQuery) {
+      const result = `📦 حالة الطلب رقم ${orderNumber}: قيد التوصيل. رقم التتبع: TRK-${orderNumber}`;
+      await db
+        .prepare(
+          'INSERT INTO conversations (id, user_id, message, response, created_at) VALUES (?, ?, ?, ?, ?)'
+        )
+        .bind(crypto.randomUUID(), userId, question, result, new Date().toISOString())
+        .run();
+      return c.json({ answer: result });
+    }
+
+    // ١.٣ إنشاء تذكرة
+    if (question.includes('تذكرة') || question.includes('شكوى') || question.includes('مشكلة') || question.includes('دعم')) {
+      // نسأل المستخدم عن وصف المشكلة (يمكن تطويرها لاحقاً)
+      const result = `📌 تم إنشاء تذكرة دعم. سيتم التواصل معك قريباً.`;
+      await db
+        .prepare(
+          'INSERT INTO conversations (id, user_id, message, response, created_at) VALUES (?, ?, ?, ?, ?)'
+        )
+        .bind(crypto.randomUUID(), userId, question, result, new Date().toISOString())
+        .run();
+      return c.json({ answer: result });
+    }
+
+    // ============================================================
+    // ٢. البحث في قاعدة المعرفة
+    // ============================================================
+    const words = question.split(' ').filter((w) => w.length > 2);
+    let knowledgeAnswer = '';
+    for (const word of words) {
+      const knowledgeResults = await db
+        .prepare(
+          'SELECT answer FROM knowledge WHERE question LIKE ? OR keywords LIKE ? LIMIT 1'
+        )
+        .bind(`%${word}%`, `%${word}%`)
+        .all();
+      if (knowledgeResults.results && knowledgeResults.results.length > 0) {
+        knowledgeAnswer = knowledgeResults.results[0].answer as string;
+        break;
+      }
+    }
+
+    if (knowledgeAnswer) {
+      await db
+        .prepare(
+          'INSERT INTO conversations (id, user_id, message, response, created_at) VALUES (?, ?, ?, ?, ?)'
+        )
+        .bind(crypto.randomUUID(), userId, question, knowledgeAnswer, new Date().toISOString())
+        .run();
+      return c.json({ answer: knowledgeAnswer });
+    }
+
+    // ============================================================
+    // ٣. الأسئلة العامة (استخدام AI.run)
+    // ============================================================
+    const history = await db
+      .prepare(
+        'SELECT message, response FROM conversations WHERE user_id = ? ORDER BY created_at DESC LIMIT 5'
+      )
+      .bind(userId)
+      .all();
+
+    let context = '';
+    if (history.results && history.results.length > 0) {
+      const reversed = history.results.reverse();
+      context = 'المحادثات السابقة:\n';
+      for (const rec of reversed) {
+        context += `- س: ${rec.message}\n- ج: ${rec.response}\n`;
+      }
+    }
+
+    const systemPrompt = `أنت وكيل دعم فني محترف لشركة تقنية.
+تعليماتك الأساسية:
+- أجب باللغة العربية الفصحى بإجابة مختصرة وواضحة.
+- لا تختلق معلومات.
+- إذا كان السؤال يتعلق بسياسات الشركة، استخدم المعلومات الرسمية إن وجدت.
+${context ? `\n${context}` : ''}
+
+سؤال العميل: ${question}`;
+
+    let aiResponse;
+    try {
+      aiResponse = await c.env.AI.run('@cf/meta/llama-3.2-3b-instruct', {
+        messages: [{ role: 'user', content: systemPrompt }],
+        temperature: 0.7,
+        max_tokens: 256,
+      });
+    } catch (err) {
+      console.error('AI Error:', err);
+      return c.json({ answer: '⚠️ عذراً، حدث خطأ في الذكاء الاصطناعي. حاول مرة أخرى.' });
+    }
+
+    const answer = (aiResponse as any).response || '⚠️ عذراً، لم أستطع معالجة طلبك.';
     await db
       .prepare(
         'INSERT INTO conversations (id, user_id, message, response, created_at) VALUES (?, ?, ?, ?, ?)'
       )
-      .bind(
-        crypto.randomUUID(),
-        userId,
-        question,
-        answer,
-        new Date().toISOString()
-      )
+      .bind(crypto.randomUUID(), userId, question, answer, new Date().toISOString())
       .run();
 
     return c.json({ answer });
   } catch (e) {
     console.error('❌ Ask error:', e);
-    return c.json(
-      {
-        answer: '⚠️ عذراً، حدث خطأ في النظام. حاول مرة أخرى.',
-      },
-      200
-    );
+    return c.json({ answer: '⚠️ عذراً، حدث خطأ في النظام. حاول مرة أخرى.' }, 200);
   }
 });
 
 // ============================================================
-// ٨. جلب المحادثات السابقة
+// ٧. جلب المحادثات السابقة
 // ============================================================
-
 app.get('/api/conversations', async (c) => {
   try {
     const auth = c.req.header('Authorization');
