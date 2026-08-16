@@ -1,15 +1,16 @@
 /**
  * ============================================================
- * وكيل دعم عملاء - النسخة المحسّنة مع الذاكرة والسياق (v5.0)
- * 
+ * وكيل دعم عملاء - النسخة المحسّنة النهائية (v5.1)
+ *
  * تعتمد على أفضل ممارسات إدارة الحالة والسياق
  * وفقًا لأحدث وثائق Cloudflare (أغسطس 2026)
- * 
+ *
  * التحسينات الرئيسية:
- * - نظام إدارة سياق متكامل يخزن الهدف والمعلومات المجمعة.
- * - استخدام D1 كذاكرة دائمة للسياق.
- * - تحسين كشف النية ليكون واعيًا بالسياق.
- * - تحسين System Prompt لتضمين معلومات السياق.
+ * - تصحيح منطق "نعم" كتأكيد وليس إلغاء.
+ * - تحسين معالجة حالة `awaiting_clarification` للردود المختصرة.
+ * - تحسين التمييز بين الأسئلة العامة وإنشاء التذكرة.
+ * - تحسين التمييز بين تتبع الطلب وإنشاء التذكرة.
+ * - تحسين System Prompt لتضمين السياق بشكل أفضل.
  * ============================================================
  */
 
@@ -26,12 +27,10 @@ type Env = {
   CLOUDFLARE_ACCOUNT_ID: string;
 };
 
-// تعريف بنية السياق
 type ConversationContext = {
   pendingGoal?: 'update_email' | 'track_order' | 'create_ticket' | null;
   orderNumber?: string;
   issueDescription?: string;
-  // يمكن إضافة المزيد من الحقول حسب الحاجة
 };
 
 const app = new Hono<{ Bindings: Env }>();
@@ -361,17 +360,23 @@ function detectIntent(
 } {
   const lower = question.toLowerCase();
 
-  // 1. كشف الإلغاء
+  // 1. كشف الإلغاء (يجب أن يكون قبل التأكيد)
   if (lower.includes('إلغاء') || lower.includes('رجوع') || lower.includes('الغاء')) {
     return { type: 'cancel' };
   }
 
-  // 2. كشف التأكيد
+  // 2. كشف التأكيد (نعم، Yes، موافق)
   if (lower.includes('نعم') || lower.includes('yes') || lower.includes('موافق')) {
     return { type: 'confirm' };
   }
 
-  // 3. كشف تحديث البريد الإلكتروني
+  // 3. كشف الأسئلة العامة (يجب أن يكون قبل create_ticket)
+  const generalKeywords = ['ما هو', 'ما هي', 'ماذا', 'شرح', 'معنى', 'تعريف', 'ما دور', 'ما وظيفة'];
+  if (generalKeywords.some(k => lower.includes(k))) {
+    return { type: 'knowledge' };
+  }
+
+  // 4. كشف تحديث البريد الإلكتروني
   const updateKeywords = ['تحديث', 'تغيير', 'تعديل', 'تبديل', 'تجديد'];
   const emailKeywords = ['بريد', 'إيميل', 'ايميل', 'email', 'الإيميل', 'الايميل'];
   const hasUpdate = updateKeywords.some(k => lower.includes(k));
@@ -381,7 +386,7 @@ function detectIntent(
     return { type: 'update_email' };
   }
 
-  // 4. كشف تحديث بيانات عامة
+  // 5. كشف تحديث بيانات عامة
   if (hasUpdate && !hasEmail) {
     const profileKeywords = ['بيانات', 'حساب', 'معلومات', 'ملفي', 'بروفايل'];
     if (profileKeywords.some(k => lower.includes(k))) {
@@ -389,7 +394,7 @@ function detectIntent(
     }
   }
 
-  // 5. كشف تتبع الطلب (يتميز بسياق "طلب التتبع" أو إذا كان الهدف السابق هو تتبع)
+  // 6. كشف تتبع الطلب
   const orderKeywords = ['طلب', 'شحنة', 'تتبع', 'Track', 'Order', 'طلبى', 'طلبي', 'شحن'];
   const isOrderQuery = orderKeywords.some(k => lower.includes(k));
   const shippingTimeKeywords = ['مدة', 'وقت', 'كم', 'متي', 'متى', 'يستغرق', 'استلام', 'توصيل', 'شحن', 'وصول'];
@@ -397,9 +402,11 @@ function detectIntent(
 
   // التحقق: إذا كان الهدف السابق هو "إنشاء تذكرة"، فلا نقوم بتحويل السؤال إلى تتبع إلا إذا كان صريحاً.
   if (context.pendingGoal === 'create_ticket') {
+    // إذا كان السؤال يحتوي على "تتبع" بشكل صريح، قد يكون تغيير نية.
     if (lower.includes('تتبع') && isOrderQuery) {
       return { type: 'track_order' };
     }
+    // وإلا، اعتبره وصفاً للمشكلة (للتذكرة)
     return { type: 'general' };
   }
 
@@ -407,18 +414,18 @@ function detectIntent(
     return { type: 'track_order' };
   }
 
-  // 6. كشف الاستفسار عن سياسة الشحن
+  // 7. كشف الاستفسار عن سياسة الشحن
   if (isShippingTimeQuery && (lower.includes('طلب') || lower.includes('شحن') || lower.includes('توصيل'))) {
     return { type: 'shipping_policy' };
   }
 
-  // 7. كشف إنشاء تذكرة
+  // 8. كشف إنشاء تذكرة (يجب أن يكون بعد general و knowledge)
   const ticketKeywords = ['تذكرة', 'شكوى', 'مشكلة', 'دعم', 'مساعدة'];
   if (ticketKeywords.some(k => lower.includes(k))) {
     return { type: 'create_ticket' };
   }
 
-  // 8. كشف الأسئلة المعرفية
+  // 9. كشف الأسئلة المعرفية الأخرى
   const knowledgeKeywords = [
     'سياسة',
     'استرجاع',
@@ -431,9 +438,6 @@ function detectIntent(
     'حساب',
     'دفع',
     'كارت',
-    'ما هو',
-    'ماذا يعني',
-    'شرح',
     'الذكاء الاصطناعي',
     'ai',
     'تحليل',
@@ -451,25 +455,25 @@ function detectIntent(
     return { type: 'knowledge' };
   }
 
-  // 9. كشف البريد الإلكتروني
+  // 10. كشف البريد الإلكتروني
   const email = extractEmail(question);
   if (email) {
     return { type: 'provide_email', data: { email } };
   }
 
-  // 10. كشف الكود
+  // 11. كشف الكود
   const hasOnlyNumbers = /^\d+$/.test(question.trim());
   if (hasOnlyNumbers) {
     return { type: 'provide_code', data: { code: question.trim() } };
   }
 
-  // 11. كشف رقم الطلب
+  // 12. كشف رقم الطلب
   const order = extractNumber(question);
   if (order) {
     return { type: 'provide_order', data: { orderNumber: order } };
   }
 
-  // 12. الحالة العامة
+  // 13. الحالة العامة
   return { type: 'general' };
 }
 
@@ -557,7 +561,6 @@ app.post('/api/ask', async (c) => {
 
     await cleanExpiredSessions(db);
 
-    // جلب الجلسة النشطة والسياق الحالي
     const activeSession = await getActiveSession(db, userId);
     let currentContext: ConversationContext = { pendingGoal: null };
 
@@ -565,7 +568,6 @@ app.post('/api/ask', async (c) => {
       currentContext = activeSession.data.context || { pendingGoal: null };
     }
 
-    // كشف النية مع مراعاة السياق
     const intent = detectIntent(question, currentContext);
 
     // 2.1 معالجة الإلغاء
@@ -581,7 +583,6 @@ app.post('/api/ask', async (c) => {
     // 2.2 معالجة النية الجديدة التي تبدأ جلسة جديدة
     const newIntentTypes: string[] = ['update_email', 'update_profile', 'track_order', 'create_ticket'];
     if (newIntentTypes.includes(intent.type)) {
-      // إذا كانت هناك جلسة نشطة، نلغيها (لأنها نية جديدة)
       if (activeSession) {
         await deleteSession(db, activeSession.id);
       }
@@ -594,7 +595,7 @@ app.post('/api/ask', async (c) => {
 
       if (intent.type === 'update_email') {
         newSessionData.step = 'awaiting_email';
-        const sessionId = await createSession(db, userId, newSessionData);
+        await createSession(db, userId, newSessionData);
         return c.json({
           answer: '📧 الرجاء كتابة البريد الإلكتروني الجديد الذي ترغب في تحديثه.',
         });
@@ -612,7 +613,7 @@ app.post('/api/ask', async (c) => {
 
       if (intent.type === 'track_order') {
         newSessionData.step = 'awaiting_order';
-        const sessionId = await createSession(db, userId, newSessionData);
+        await createSession(db, userId, newSessionData);
         return c.json({
           answer: '📦 الرجاء كتابة رقم الطلب الذي ترغب في تتبعه (أرقام فقط).',
         });
@@ -620,7 +621,7 @@ app.post('/api/ask', async (c) => {
 
       if (intent.type === 'create_ticket') {
         newSessionData.step = 'awaiting_ticket_issue';
-        const sessionId = await createSession(db, userId, newSessionData);
+        await createSession(db, userId, newSessionData);
         return c.json({
           answer: '📌 الرجاء كتابة وصف المشكلة التي تواجهها بالتفصيل.',
         });
@@ -648,13 +649,37 @@ app.post('/api/ask', async (c) => {
       } else if (currentStep === 'awaiting_ticket_issue' || currentStep === 'awaiting_ticket_confirm') {
         const allowedIntents = ['general', 'confirm'];
         if (intent.type === 'general') {
-          // قد يكون وصفاً للمشكلة
           shouldCancel = false;
         } else if (!allowedIntents.includes(intent.type)) {
           shouldCancel = true;
         }
       } else if (currentStep === 'awaiting_clarification') {
-        shouldCancel = true;
+        // ✅ تحسين معالجة حالة التوضيح: أي رد (نعم، لا، كلمة) يعتبر إجابة
+        shouldCancel = false;
+        // معالجة الرد
+        const lower = question.toLowerCase();
+        if (lower.includes('بريد') || lower.includes('إيميل') || lower.includes('ايميل') || lower.includes('نعم')) {
+          await deleteSession(db, session.id);
+          const newSessionData: SessionData = {
+            step: 'awaiting_email',
+            context: { pendingGoal: 'update_email' },
+            data: {},
+          };
+          await createSession(db, userId, newSessionData);
+          return c.json({
+            answer: '📧 الرجاء كتابة البريد الإلكتروني الجديد الذي ترغب في تحديثه.',
+          });
+        } else if (lower.includes('اسم') || lower.includes('هاتف') || lower.includes('رقم') || lower.includes('لا')) {
+          await deleteSession(db, session.id);
+          return c.json({
+            answer: '📝 لتحديث الاسم أو رقم الهاتف، يرجى التواصل مع فريق الدعم عبر البريد الإلكتروني support@company.com',
+          });
+        } else {
+          // أي كلمة أخرى، نطلب توضيحاً
+          return c.json({
+            answer: '📝 لم أفهم ما تريد تحديثه بالضبط. هل تقصد تحديث بريدك الإلكتروني أم معلومات أخرى؟',
+          });
+        }
       }
 
       if (shouldCancel) {
@@ -671,31 +696,6 @@ app.post('/api/ask', async (c) => {
       }
 
       // معالجة الجلسة حسب الخطوة الحالية
-      if (currentStep === 'awaiting_clarification') {
-        const lower = question.toLowerCase();
-        if (lower.includes('بريد') || lower.includes('إيميل') || lower.includes('ايميل')) {
-          await deleteSession(db, session.id);
-          const newSessionData: SessionData = {
-            step: 'awaiting_email',
-            context: { pendingGoal: 'update_email' },
-            data: {},
-          };
-          await createSession(db, userId, newSessionData);
-          return c.json({
-            answer: '📧 الرجاء كتابة البريد الإلكتروني الجديد الذي ترغب في تحديثه.',
-          });
-        } else if (lower.includes('اسم') || lower.includes('هاتف') || lower.includes('رقم')) {
-          await deleteSession(db, session.id);
-          return c.json({
-            answer: '📝 لتحديث الاسم أو رقم الهاتف، يرجى التواصل مع فريق الدعم عبر البريد الإلكتروني support@company.com',
-          });
-        } else {
-          return c.json({
-            answer: '📝 لم أفهم ما تريد تحديثه بالضبط. هل تقصد تحديث بريدك الإلكتروني أم معلومات أخرى؟',
-          });
-        }
-      }
-
       if (currentStep === 'awaiting_email') {
         if (intent.type === 'provide_email' && intent.data?.email) {
           const email = intent.data.email;
@@ -746,7 +746,6 @@ app.post('/api/ask', async (c) => {
       if (currentStep === 'awaiting_order') {
         if (intent.type === 'provide_order' && intent.data?.orderNumber) {
           const order = intent.data.orderNumber;
-          // تخزين رقم الطلب في السياق
           sessionData.context.orderNumber = order;
           sessionData.step = 'awaiting_order_confirm';
           sessionData.data = { orderNumber: order };
@@ -781,7 +780,6 @@ app.post('/api/ask', async (c) => {
       }
 
       if (currentStep === 'awaiting_ticket_issue') {
-        // ✅ جمع وصف المشكلة وتخزينه في السياق
         if (question.length >= 5) {
           sessionData.context.issueDescription = question;
           sessionData.step = 'awaiting_ticket_confirm';
@@ -799,7 +797,6 @@ app.post('/api/ask', async (c) => {
 
       if (currentStep === 'awaiting_ticket_confirm') {
         if (intent.type === 'confirm') {
-          // ✅ استخدام الوصف المخزن في السياق ورقم الطلب إن وجد
           const issue = sessionData.context.issueDescription || sessionData.data.ticketIssue || 'مشكلة غير محددة';
           const orderNumber = sessionData.context.orderNumber;
           const result = await executeCreateTicket(
@@ -850,7 +847,6 @@ async function handleKnowledgeQuestion(
   question: string,
   intentType?: string
 ) {
-  // 1. محاولة البحث في قاعدة المعرفة
   const words = question.split(' ').filter((w) => w.length > 2);
   let knowledgeAnswer = '';
   for (const word of words) {
@@ -876,7 +872,6 @@ async function handleKnowledgeQuestion(
     return c.json({ answer: knowledgeAnswer });
   }
 
-  // 2. إذا كانت النية هي الاستفسار عن سياسة الشحن، نقدم رداً بديلاً مفيداً
   if (intentType === 'shipping_policy') {
     const fallbackAnswer =
       '⏳ عادةً ما يستغرق وصول الطلب من ٣ إلى ٥ أيام عمل من تاريخ الشراء. يتم إرسال رقم تتبع على البريد الإلكتروني عند الشحن. هل يمكنني مساعدتك في شيء آخر؟';
@@ -889,12 +884,11 @@ async function handleKnowledgeQuestion(
     return c.json({ answer: fallbackAnswer });
   }
 
-  // 3. إذا لم نجد في المعرفة، نستخدم AI.run مع System Prompt محسّن
   return await handleGeneralQuestion(c, db, userId, question, {});
 }
 
 // ============================================================
-// دالة معالجة الأسئلة العامة (محسّنة مع System Prompt جديد)
+// دالة معالجة الأسئلة العامة
 // ============================================================
 async function handleGeneralQuestion(
   c: any,
@@ -903,7 +897,6 @@ async function handleGeneralQuestion(
   question: string,
   context: ConversationContext
 ) {
-  // جلب آخر 3 محادثات فقط للسياق
   const history = await db
     .prepare(
       'SELECT message, response FROM conversations WHERE user_id = ? ORDER BY created_at DESC LIMIT 3'
@@ -920,7 +913,6 @@ async function handleGeneralQuestion(
     }
   }
 
-  // بناء سياق إضافي من المعلومات المخزنة
   let contextInfo = '';
   if (context.pendingGoal) {
     contextInfo += `\nالهدف الحالي للعميل: ${context.pendingGoal}`;
@@ -932,7 +924,6 @@ async function handleGeneralQuestion(
     contextInfo += `\nوصف المشكلة: ${context.issueDescription}`;
   }
 
-  // System Prompt محسّن مع تضمين السياق
   const systemPrompt = `أنت مساعد دعم فني محترف لشركة تقنية، اسمك "ناصر". هدفك الأساسي هو مساعدة العملاء في حل مشكلاتهم بأسرع وقت ممكن.
 
 شخصيتك: ودود، محترف، ومباشر. استخدم اللغة العربية الفصحى البسيطة.
@@ -940,11 +931,10 @@ async function handleGeneralQuestion(
 قواعدك الأساسية:
 1. **كن موجزاً**: لا تزيد ردودك عن ٣ جمل، إلا إذا طلب العميل تفاصيل إضافية.
 2. **لا تكرر المعلومات**: إذا سبق وأن قدمت معلومات، لا تعيدها إلا إذا طُلب منك ذلك.
-3. **التعامل مع الأخطاء الإملائية**: إذا كان السؤال يحتوي على أخطاء إملائية، حاول فهم المعنى المقصود وقدم إجابة مفيدة.
-4. **آلية التراجع (Fallback)**: إذا لم تكن متأكداً من الإجابة، اعترف بذلك وقل "لا أملك هذه المعلومة حالياً. هل يمكنني مساعدتك في شيء آخر؟" بدلاً من التخمين.
+3. **التعامل مع الأخطاء الإملائية**: حاول فهم المعنى المقصود وقدم إجابة مفيدة.
+4. **آلية التراجع**: إذا لم تكن متأكداً من الإجابة، اعترف بذلك وقل "لا أملك هذه المعلومة حالياً".
 5. **إذا كان السؤال عن سياسات الشركة**: استخدم المعلومات الرسمية من قاعدة المعرفة.
-6. **حافظ على لهجة مهذبة ومحترفة**.
-7. **تذكر السياق**: استخدم المعلومات التالية عن المحادثة الحالية لتقديم إجابة أفضل.
+6. **تذكر السياق**: استخدم المعلومات التالية عن المحادثة الحالية لتقديم إجابة أفضل.
 
 ${historyContext ? `\n${historyContext}` : ''}
 ${contextInfo ? `\nمعلومات السياق الحالي:${contextInfo}` : ''}
