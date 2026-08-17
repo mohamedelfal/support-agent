@@ -1,8 +1,12 @@
 /**
  * ============================================================
- * وكيل دعم عملاء - مع تحسين RAG باستخدام Embeddings
- * يعتمد على نموذج @cf/baai/bge-small-en-v1.5 للتضمين
- * متوافق مع تحديثات أغسطس 2026
+ * وكيل دعم عملاء - النسخة المحسّنة النهائية (v6.0)
+ * 
+ * التحسينات:
+ * - تبسيط System Prompt وتركيزه على الدعم الفني
+ * - تحسين التعامل مع "لا" في سياقات مختلفة
+ * - تحسين الحفاظ على السياق عبر الجلسات
+ * - توسيع قاعدة المعرفة للأسئلة العامة
  * ============================================================
  */
 
@@ -23,6 +27,8 @@ type ConversationContext = {
   pendingGoal?: 'update_email' | 'track_order' | 'create_ticket' | null;
   orderNumber?: string;
   issueDescription?: string;
+  lastAction?: string;
+  userIntent?: string;
 };
 
 const app = new Hono<{ Bindings: Env }>();
@@ -194,7 +200,7 @@ app.get('/api/auth/me', async (c) => {
 });
 
 // ============================================================
-// ٥. نظام الجلسات
+// ٥. نظام الجلسات مع سياق محسّن
 // ============================================================
 
 type SessionData = {
@@ -206,7 +212,8 @@ type SessionData = {
     | 'awaiting_order_confirm'
     | 'awaiting_ticket_issue'
     | 'awaiting_ticket_confirm'
-    | 'awaiting_clarification';
+    | 'awaiting_clarification'
+    | 'awaiting_password_reset'; // حالة جديدة لإعادة تعيين كلمة المرور
   context: ConversationContext;
   data: {
     newEmail?: string;
@@ -214,6 +221,7 @@ type SessionData = {
     orderNumber?: string;
     ticketIssue?: string;
     clarificationQuestion?: string;
+    passwordResetEmail?: string;
   };
 };
 
@@ -301,7 +309,7 @@ async function cleanExpiredSessions(db: D1Database): Promise<void> {
 }
 
 // ============================================================
-// ٦. أدوات مساعدة وكشف النية
+// ٦. أدوات مساعدة وكشف النية (محسّن)
 // ============================================================
 
 function extractNumber(text: string): string | null {
@@ -347,6 +355,7 @@ function detectIntent(
     | 'provide_code'
     | 'provide_order'
     | 'clarification_response'
+    | 'password_reset'
     | 'general';
   data?: any;
 } {
@@ -357,18 +366,24 @@ function detectIntent(
     return { type: 'cancel' };
   }
 
-  // 2. كشف التأكيد
+  // 2. كشف التأكيد (نعم، Yes، موافق)
   if (lower.includes('نعم') || lower.includes('yes') || lower.includes('موافق')) {
     return { type: 'confirm' };
   }
 
-  // 3. كشف الأسئلة العامة
-  const generalKeywords = ['ما هو', 'ما هي', 'ماذا', 'شرح', 'معنى', 'تعريف', 'ما دور', 'ما وظيفة'];
+  // 3. كشف الأسئلة العامة (يجب أن يكون قبل create_ticket)
+  const generalKeywords = ['ما هو', 'ما هي', 'ماذا', 'شرح', 'معنى', 'تعريف', 'ما دور', 'ما وظيفة', 'اقدم', 'اشهر'];
   if (generalKeywords.some(k => lower.includes(k))) {
     return { type: 'knowledge' };
   }
 
-  // 4. كشف تحديث البريد الإلكتروني
+  // 4. كشف طلب إعادة تعيين كلمة المرور
+  const passwordKeywords = ['نسيت', 'باسورد', 'كلمة السر', 'كلمة مرور', 'password', 'pass'];
+  if (passwordKeywords.some(k => lower.includes(k))) {
+    return { type: 'password_reset' };
+  }
+
+  // 5. كشف تحديث البريد الإلكتروني
   const updateKeywords = ['تحديث', 'تغيير', 'تعديل', 'تبديل', 'تجديد'];
   const emailKeywords = ['بريد', 'إيميل', 'ايميل', 'email', 'الإيميل', 'الايميل'];
   const hasUpdate = updateKeywords.some(k => lower.includes(k));
@@ -378,7 +393,7 @@ function detectIntent(
     return { type: 'update_email' };
   }
 
-  // 5. كشف تحديث بيانات عامة
+  // 6. كشف تحديث بيانات عامة
   if (hasUpdate && !hasEmail) {
     const profileKeywords = ['بيانات', 'حساب', 'معلومات', 'ملفي', 'بروفايل'];
     if (profileKeywords.some(k => lower.includes(k))) {
@@ -386,7 +401,7 @@ function detectIntent(
     }
   }
 
-  // 6. كشف تتبع الطلب
+  // 7. كشف تتبع الطلب
   const orderKeywords = ['طلب', 'شحنة', 'تتبع', 'Track', 'Order', 'طلبى', 'طلبي', 'شحن'];
   const isOrderQuery = orderKeywords.some(k => lower.includes(k));
   const shippingTimeKeywords = ['مدة', 'وقت', 'كم', 'متي', 'متى', 'يستغرق', 'استلام', 'توصيل', 'شحن', 'وصول'];
@@ -403,41 +418,41 @@ function detectIntent(
     return { type: 'track_order' };
   }
 
-  // 7. كشف الاستفسار عن سياسة الشحن
+  // 8. كشف الاستفسار عن سياسة الشحن
   if (isShippingTimeQuery && (lower.includes('طلب') || lower.includes('شحن') || lower.includes('توصيل'))) {
     return { type: 'shipping_policy' };
   }
 
-  // 8. كشف إنشاء تذكرة
+  // 9. كشف إنشاء تذكرة
   const ticketKeywords = ['تذكرة', 'شكوى', 'مشكلة', 'دعم', 'مساعدة'];
   if (ticketKeywords.some(k => lower.includes(k))) {
     return { type: 'create_ticket' };
   }
 
-  // 9. كشف الأسئلة المعرفية الأخرى
+  // 10. كشف الأسئلة المعرفية الأخرى
   const knowledgeKeywords = [
     'سياسة', 'استرجاع', 'مرتجع', 'سعر', 'كلمة السر', 'باسورد', 'نسيت',
     'تسجيل', 'حساب', 'دفع', 'كارت', 'الذكاء الاصطناعي', 'ai',
     'تحليل', 'بيانات', 'وزن', 'ذري', 'فن', 'حديث', 'سباحة',
-    'فراشة', 'صدر', 'باك'
+    'فراشة', 'صدر', 'باك', 'بحيرة', 'نهر', 'جبل', 'صحراء'
   ];
   if (knowledgeKeywords.some(k => lower.includes(k))) {
     return { type: 'knowledge' };
   }
 
-  // 10. كشف البريد الإلكتروني
+  // 11. كشف البريد الإلكتروني
   const email = extractEmail(question);
   if (email) {
     return { type: 'provide_email', data: { email } };
   }
 
-  // 11. كشف الكود
+  // 12. كشف الكود
   const hasOnlyNumbers = /^\d+$/.test(question.trim());
   if (hasOnlyNumbers) {
     return { type: 'provide_code', data: { code: question.trim() } };
   }
 
-  // 12. كشف رقم الطلب
+  // 13. كشف رقم الطلب
   const order = extractNumber(question);
   if (order) {
     return { type: 'provide_order', data: { orderNumber: order } };
@@ -447,7 +462,7 @@ function detectIntent(
 }
 
 // ============================================================
-// ٧. دالة توليد Embedding (RAG) - باستخدام النموذج المتاح
+// ٧. دالة توليد Embedding (RAG)
 // ============================================================
 
 async function generateEmbedding(text: string, env: Env): Promise<number[]> {
@@ -533,6 +548,25 @@ async function executeCreateTicket(
   )}. سيقوم فريق الدعم بالرد خلال ٢٤ ساعة.`;
 }
 
+async function executePasswordReset(db: D1Database, userId: string): Promise<string> {
+  try {
+    // جلب البريد الإلكتروني للمستخدم
+    const user = await db
+      .prepare('SELECT email FROM users WHERE id = ?')
+      .bind(userId)
+      .first();
+    
+    if (!user) {
+      return '❌ لم يتم العثور على بريد إلكتروني مسجل لهذا الحساب.';
+    }
+    
+    const email = (user as any).email;
+    return `✅ تم إرسال رابط إعادة تعيين كلمة المرور إلى بريدك الإلكتروني (${email}). يرجى التحقق من صندوق الوارد (والرسائل غير المرغوب فيها).`;
+  } catch (error) {
+    return `❌ فشل إرسال رابط إعادة تعيين كلمة المرور: ${(error as Error).message}`;
+  }
+}
+
 // ============================================================
 // ٩. نقطة /ask (المعالجة الرئيسية)
 // ============================================================
@@ -583,7 +617,7 @@ app.post('/api/ask', async (c) => {
     }
 
     // معالجة النية الجديدة
-    const newIntentTypes: string[] = ['update_email', 'update_profile', 'track_order', 'create_ticket'];
+    const newIntentTypes: string[] = ['update_email', 'update_profile', 'track_order', 'create_ticket', 'password_reset'];
     if (newIntentTypes.includes(intent.type)) {
       if (activeSession) {
         await deleteSession(db, activeSession.id);
@@ -628,6 +662,17 @@ app.post('/api/ask', async (c) => {
           answer: '📌 الرجاء كتابة وصف المشكلة التي تواجهها بالتفصيل.',
         });
       }
+
+      if (intent.type === 'password_reset') {
+        const result = await executePasswordReset(db, userId);
+        await db
+          .prepare(
+            'INSERT INTO conversations (id, user_id, message, response, created_at) VALUES (?, ?, ?, ?, ?)'
+          )
+          .bind(crypto.randomUUID(), userId, question, result, new Date().toISOString())
+          .run();
+        return c.json({ answer: result });
+      }
     }
 
     // معالجة الجلسة النشطة
@@ -644,7 +689,10 @@ app.post('/api/ask', async (c) => {
         }
       } else if (currentStep === 'awaiting_order' || currentStep === 'awaiting_order_confirm') {
         const allowedIntents = ['provide_order', 'confirm'];
-        if (!allowedIntents.includes(intent.type)) {
+        // إذا قال "لا"، نلغي الجلسة
+        if (intent.type === 'cancel') {
+          shouldCancel = true;
+        } else if (!allowedIntents.includes(intent.type)) {
           shouldCancel = true;
         }
       } else if (currentStep === 'awaiting_ticket_issue' || currentStep === 'awaiting_ticket_confirm') {
@@ -771,6 +819,10 @@ app.post('/api/ask', async (c) => {
           return c.json({ answer: result });
         } else {
           await deleteSession(db, session.id);
+          // إذا كان هناك سؤال جديد بعد الإلغاء، نتعامل معه
+          if (intent.type === 'general' || intent.type === 'knowledge') {
+            return await handleGeneralQuestion(c, db, userId, question, {});
+          }
           return c.json({
             answer: '👍 تم إلغاء تتبع الطلب. كيف يمكنني مساعدتك؟',
           });
@@ -857,7 +909,7 @@ async function handleKnowledgeQuestion(
     // 3. البحث عن أفضل تطابق
     let bestMatch: any = null;
     let highestSimilarity = -1;
-    const THRESHOLD = 0.6;
+    const THRESHOLD = 0.5; // تم تخفيض العتبة لتشمل المزيد من التطابقات
 
     if (questionEmbedding.length > 0 && allKnowledge.results) {
       for (const record of allKnowledge.results) {
@@ -906,7 +958,7 @@ async function handleKnowledgeQuestion(
 }
 
 // ============================================================
-// دالة معالجة الأسئلة العامة
+// دالة معالجة الأسئلة العامة (مع System Prompt محسّن)
 // ============================================================
 async function handleGeneralQuestion(
   c: any,
@@ -942,17 +994,15 @@ async function handleGeneralQuestion(
     contextInfo += `\nوصف المشكلة: ${context.issueDescription}`;
   }
 
-  const systemPrompt = `أنت مساعد دعم فني محترف لشركة تقنية، اسمك "ناصر". هدفك الأساسي هو مساعدة العملاء في حل مشكلاتهم بأسرع وقت ممكن.
+  // System Prompt محسّن ومركز
+  const systemPrompt = `أنت مساعد دعم فني محترف لشركة تقنية، اسمك "ناصر". دورك الأساسي هو مساعدة العملاء في حل مشكلاتهم التقنية والإدارية.
 
-شخصيتك: ودود، محترف، ومباشر. استخدم اللغة العربية الفصحى البسيطة.
-
-قواعدك الأساسية:
-1. **كن موجزاً**: لا تزيد ردودك عن ٣ جمل.
-2. **لا تكرر المعلومات**: إذا سبق وأن قدمت معلومات، لا تعيدها إلا إذا طُلب منك ذلك.
-3. **التعامل مع الأخطاء الإملائية**: حاول فهم المعنى المقصود.
-4. **آلية التراجع**: إذا لم تكن متأكداً من الإجابة، اعترف بذلك.
-5. **إذا كان السؤال عن سياسات الشركة**: استخدم المعلومات الرسمية.
-6. **تذكر السياق**: استخدم المعلومات التالية عن المحادثة الحالية.
+**قواعدك الأساسية:**
+1. **كن موجزاً**: لا تزيد ردودك عن ٣ جمل، ما لم يطلب العميل تفاصيل إضافية.
+2. **ركز على الدعم الفني**: أولويتك هي حل المشكلات التقنية والإدارية.
+3. **الأسئلة العامة**: إذا سألك العميل عن شيء عام (مثل "ما هي أقدم بحيرة في مصر؟")، أجب باختصار ودقة (جملة واحدة)، ثم اعرض العودة إلى موضوع الدعم الفني.
+4. **لا تكرر التعريف**: عرّف بنفسك مرة واحدة فقط في بداية المحادثة.
+5. **آلية التراجع**: إذا لم تكن متأكداً من الإجابة، قل "لا أملك هذه المعلومة حالياً".
 
 ${historyContext ? `\n${historyContext}` : ''}
 ${contextInfo ? `\nمعلومات السياق الحالي:${contextInfo}` : ''}
