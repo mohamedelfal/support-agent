@@ -1,16 +1,8 @@
 /**
  * ============================================================
- * وكيل دعم عملاء - النسخة المحسّنة النهائية (v5.1)
- *
- * تعتمد على أفضل ممارسات إدارة الحالة والسياق
- * وفقًا لأحدث وثائق Cloudflare (أغسطس 2026)
- *
- * التحسينات الرئيسية:
- * - تصحيح منطق "نعم" كتأكيد وليس إلغاء.
- * - تحسين معالجة حالة `awaiting_clarification` للردود المختصرة.
- * - تحسين التمييز بين الأسئلة العامة وإنشاء التذكرة.
- * - تحسين التمييز بين تتبع الطلب وإنشاء التذكرة.
- * - تحسين System Prompt لتضمين السياق بشكل أفضل.
+ * وكيل دعم عملاء - مع تحسين RAG باستخدام Embeddings
+ * يعتمد على نموذج @cf/baai/bge-small-en-v1.5 للتضمين
+ * متوافق مع تحديثات أغسطس 2026
  * ============================================================
  */
 
@@ -202,7 +194,7 @@ app.get('/api/auth/me', async (c) => {
 });
 
 // ============================================================
-// ٥. نظام الجلسات والحالة المستمرة
+// ٥. نظام الجلسات
 // ============================================================
 
 type SessionData = {
@@ -309,7 +301,7 @@ async function cleanExpiredSessions(db: D1Database): Promise<void> {
 }
 
 // ============================================================
-// ٦. أدوات مساعدة وكشف النية (محسّن)
+// ٦. أدوات مساعدة وكشف النية
 // ============================================================
 
 function extractNumber(text: string): string | null {
@@ -360,17 +352,17 @@ function detectIntent(
 } {
   const lower = question.toLowerCase();
 
-  // 1. كشف الإلغاء (يجب أن يكون قبل التأكيد)
+  // 1. كشف الإلغاء
   if (lower.includes('إلغاء') || lower.includes('رجوع') || lower.includes('الغاء')) {
     return { type: 'cancel' };
   }
 
-  // 2. كشف التأكيد (نعم، Yes، موافق)
+  // 2. كشف التأكيد
   if (lower.includes('نعم') || lower.includes('yes') || lower.includes('موافق')) {
     return { type: 'confirm' };
   }
 
-  // 3. كشف الأسئلة العامة (يجب أن يكون قبل create_ticket)
+  // 3. كشف الأسئلة العامة
   const generalKeywords = ['ما هو', 'ما هي', 'ماذا', 'شرح', 'معنى', 'تعريف', 'ما دور', 'ما وظيفة'];
   if (generalKeywords.some(k => lower.includes(k))) {
     return { type: 'knowledge' };
@@ -400,13 +392,10 @@ function detectIntent(
   const shippingTimeKeywords = ['مدة', 'وقت', 'كم', 'متي', 'متى', 'يستغرق', 'استلام', 'توصيل', 'شحن', 'وصول'];
   const isShippingTimeQuery = shippingTimeKeywords.some(k => lower.includes(k));
 
-  // التحقق: إذا كان الهدف السابق هو "إنشاء تذكرة"، فلا نقوم بتحويل السؤال إلى تتبع إلا إذا كان صريحاً.
   if (context.pendingGoal === 'create_ticket') {
-    // إذا كان السؤال يحتوي على "تتبع" بشكل صريح، قد يكون تغيير نية.
     if (lower.includes('تتبع') && isOrderQuery) {
       return { type: 'track_order' };
     }
-    // وإلا، اعتبره وصفاً للمشكلة (للتذكرة)
     return { type: 'general' };
   }
 
@@ -419,7 +408,7 @@ function detectIntent(
     return { type: 'shipping_policy' };
   }
 
-  // 8. كشف إنشاء تذكرة (يجب أن يكون بعد general و knowledge)
+  // 8. كشف إنشاء تذكرة
   const ticketKeywords = ['تذكرة', 'شكوى', 'مشكلة', 'دعم', 'مساعدة'];
   if (ticketKeywords.some(k => lower.includes(k))) {
     return { type: 'create_ticket' };
@@ -427,29 +416,10 @@ function detectIntent(
 
   // 9. كشف الأسئلة المعرفية الأخرى
   const knowledgeKeywords = [
-    'سياسة',
-    'استرجاع',
-    'مرتجع',
-    'سعر',
-    'كلمة السر',
-    'باسورد',
-    'نسيت',
-    'تسجيل',
-    'حساب',
-    'دفع',
-    'كارت',
-    'الذكاء الاصطناعي',
-    'ai',
-    'تحليل',
-    'بيانات',
-    'وزن',
-    'ذري',
-    'فن',
-    'حديث',
-    'سباحة',
-    'فراشة',
-    'صدر',
-    'باك',
+    'سياسة', 'استرجاع', 'مرتجع', 'سعر', 'كلمة السر', 'باسورد', 'نسيت',
+    'تسجيل', 'حساب', 'دفع', 'كارت', 'الذكاء الاصطناعي', 'ai',
+    'تحليل', 'بيانات', 'وزن', 'ذري', 'فن', 'حديث', 'سباحة',
+    'فراشة', 'صدر', 'باك'
   ];
   if (knowledgeKeywords.some(k => lower.includes(k))) {
     return { type: 'knowledge' };
@@ -473,12 +443,44 @@ function detectIntent(
     return { type: 'provide_order', data: { orderNumber: order } };
   }
 
-  // 13. الحالة العامة
   return { type: 'general' };
 }
 
 // ============================================================
-// ٧. التنفيذ الفعلي للأدوات
+// ٧. دالة توليد Embedding (RAG) - باستخدام النموذج المتاح
+// ============================================================
+
+async function generateEmbedding(text: string, env: Env): Promise<number[]> {
+  try {
+    const response = await env.AI.run('@cf/baai/bge-small-en-v1.5', {
+      text: text
+    });
+    return response.embedding || [];
+  } catch (error) {
+    console.error('❌ Embedding error:', error);
+    return [];
+  }
+}
+
+function cosineSimilarity(a: number[], b: number[]): number {
+  if (a.length === 0 || b.length === 0 || a.length !== b.length) return 0;
+  
+  let dotProduct = 0;
+  let normA = 0;
+  let normB = 0;
+  
+  for (let i = 0; i < a.length; i++) {
+    dotProduct += a[i] * b[i];
+    normA += a[i] * a[i];
+    normB += b[i] * b[i];
+  }
+  
+  if (normA === 0 || normB === 0) return 0;
+  return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
+}
+
+// ============================================================
+// ٨. التنفيذ الفعلي للأدوات
 // ============================================================
 
 async function executeUpdateEmail(
@@ -532,7 +534,7 @@ async function executeCreateTicket(
 }
 
 // ============================================================
-// ٨. نقطة /ask (المعالجة الرئيسية)
+// ٩. نقطة /ask (المعالجة الرئيسية)
 // ============================================================
 
 app.post('/api/ask', async (c) => {
@@ -570,7 +572,7 @@ app.post('/api/ask', async (c) => {
 
     const intent = detectIntent(question, currentContext);
 
-    // 2.1 معالجة الإلغاء
+    // معالجة الإلغاء
     if (intent.type === 'cancel') {
       if (activeSession) {
         await deleteSession(db, activeSession.id);
@@ -580,7 +582,7 @@ app.post('/api/ask', async (c) => {
       });
     }
 
-    // 2.2 معالجة النية الجديدة التي تبدأ جلسة جديدة
+    // معالجة النية الجديدة
     const newIntentTypes: string[] = ['update_email', 'update_profile', 'track_order', 'create_ticket'];
     if (newIntentTypes.includes(intent.type)) {
       if (activeSession) {
@@ -628,13 +630,12 @@ app.post('/api/ask', async (c) => {
       }
     }
 
-    // 2.3 معالجة الجلسة النشطة
+    // معالجة الجلسة النشطة
     if (activeSession) {
       const session = activeSession;
       const sessionData = session.data;
       const currentStep = sessionData.step;
 
-      // التحقق من تغيير النية
       let shouldCancel = false;
       if (currentStep === 'awaiting_email' || currentStep === 'awaiting_code') {
         const allowedIntents = ['provide_email', 'provide_code', 'confirm'];
@@ -654,9 +655,7 @@ app.post('/api/ask', async (c) => {
           shouldCancel = true;
         }
       } else if (currentStep === 'awaiting_clarification') {
-        // ✅ تحسين معالجة حالة التوضيح: أي رد (نعم، لا، كلمة) يعتبر إجابة
         shouldCancel = false;
-        // معالجة الرد
         const lower = question.toLowerCase();
         if (lower.includes('بريد') || lower.includes('إيميل') || lower.includes('ايميل') || lower.includes('نعم')) {
           await deleteSession(db, session.id);
@@ -675,7 +674,6 @@ app.post('/api/ask', async (c) => {
             answer: '📝 لتحديث الاسم أو رقم الهاتف، يرجى التواصل مع فريق الدعم عبر البريد الإلكتروني support@company.com',
           });
         } else {
-          // أي كلمة أخرى، نطلب توضيحاً
           return c.json({
             answer: '📝 لم أفهم ما تريد تحديثه بالضبط. هل تقصد تحديث بريدك الإلكتروني أم معلومات أخرى؟',
           });
@@ -695,7 +693,7 @@ app.post('/api/ask', async (c) => {
         });
       }
 
-      // معالجة الجلسة حسب الخطوة الحالية
+      // معالجة الخطوات المختلفة
       if (currentStep === 'awaiting_email') {
         if (intent.type === 'provide_email' && intent.data?.email) {
           const email = intent.data.email;
@@ -823,7 +821,7 @@ app.post('/api/ask', async (c) => {
     }
 
     // ============================================================
-    // 3. الحالة العامة (بدون جلسة نشطة)
+    // 3. الحالة العامة
     // ============================================================
 
     if (intent.type === 'knowledge' || intent.type === 'shipping_policy') {
@@ -838,7 +836,7 @@ app.post('/api/ask', async (c) => {
 });
 
 // ============================================================
-// دالة معالجة الأسئلة المعرفية
+// دالة معالجة الأسئلة المعرفية (مع RAG باستخدام Embeddings)
 // ============================================================
 async function handleKnowledgeQuestion(
   c: any,
@@ -847,44 +845,64 @@ async function handleKnowledgeQuestion(
   question: string,
   intentType?: string
 ) {
-  const words = question.split(' ').filter((w) => w.length > 2);
-  let knowledgeAnswer = '';
-  for (const word of words) {
-    const knowledgeResults = await db
-      .prepare(
-        'SELECT answer FROM knowledge WHERE question LIKE ? OR keywords LIKE ? LIMIT 1'
-      )
-      .bind(`%${word}%`, `%${word}%`)
+  try {
+    // 1. جلب جميع سجلات المعرفة
+    const allKnowledge = await db
+      .prepare('SELECT id, question, answer, embedding FROM knowledge')
       .all();
-    if (knowledgeResults.results && knowledgeResults.results.length > 0) {
-      knowledgeAnswer = knowledgeResults.results[0].answer as string;
-      break;
+
+    // 2. توليد Embedding لسؤال العميل
+    const questionEmbedding = await generateEmbedding(question, c.env);
+
+    // 3. البحث عن أفضل تطابق
+    let bestMatch: any = null;
+    let highestSimilarity = -1;
+    const THRESHOLD = 0.6;
+
+    if (questionEmbedding.length > 0 && allKnowledge.results) {
+      for (const record of allKnowledge.results) {
+        const recordEmbedding = record.embedding ? JSON.parse(record.embedding as string) : [];
+        if (recordEmbedding.length > 0) {
+          const similarity = cosineSimilarity(questionEmbedding, recordEmbedding);
+          if (similarity > highestSimilarity) {
+            highestSimilarity = similarity;
+            bestMatch = record;
+          }
+        }
+      }
     }
-  }
 
-  if (knowledgeAnswer) {
-    await db
-      .prepare(
-        'INSERT INTO conversations (id, user_id, message, response, created_at) VALUES (?, ?, ?, ?, ?)'
-      )
-      .bind(crypto.randomUUID(), userId, question, knowledgeAnswer, new Date().toISOString())
-      .run();
-    return c.json({ answer: knowledgeAnswer });
-  }
+    // 4. إذا وجدنا تطابقاً
+    if (bestMatch && highestSimilarity > THRESHOLD) {
+      const answer = bestMatch.answer as string;
+      await db
+        .prepare(
+          'INSERT INTO conversations (id, user_id, message, response, created_at) VALUES (?, ?, ?, ?, ?)'
+        )
+        .bind(crypto.randomUUID(), userId, question, answer, new Date().toISOString())
+        .run();
+      return c.json({ answer });
+    }
 
-  if (intentType === 'shipping_policy') {
-    const fallbackAnswer =
-      '⏳ عادةً ما يستغرق وصول الطلب من ٣ إلى ٥ أيام عمل من تاريخ الشراء. يتم إرسال رقم تتبع على البريد الإلكتروني عند الشحن. هل يمكنني مساعدتك في شيء آخر؟';
-    await db
-      .prepare(
-        'INSERT INTO conversations (id, user_id, message, response, created_at) VALUES (?, ?, ?, ?, ?)'
-      )
-      .bind(crypto.randomUUID(), userId, question, fallbackAnswer, new Date().toISOString())
-      .run();
-    return c.json({ answer: fallbackAnswer });
-  }
+    // 5. إذا كانت النية هي الاستفسار عن سياسة الشحن
+    if (intentType === 'shipping_policy') {
+      const fallbackAnswer =
+        '⏳ عادةً ما يستغرق وصول الطلب من ٣ إلى ٥ أيام عمل من تاريخ الشراء. يتم إرسال رقم تتبع على البريد الإلكتروني عند الشحن. هل يمكنني مساعدتك في شيء آخر؟';
+      await db
+        .prepare(
+          'INSERT INTO conversations (id, user_id, message, response, created_at) VALUES (?, ?, ?, ?, ?)'
+        )
+        .bind(crypto.randomUUID(), userId, question, fallbackAnswer, new Date().toISOString())
+        .run();
+      return c.json({ answer: fallbackAnswer });
+    }
 
-  return await handleGeneralQuestion(c, db, userId, question, {});
+    // 6. إذا لم نجد تطابقاً
+    return await handleGeneralQuestion(c, db, userId, question, {});
+  } catch (error) {
+    console.error('❌ Knowledge error:', error);
+    return await handleGeneralQuestion(c, db, userId, question, {});
+  }
 }
 
 // ============================================================
@@ -929,12 +947,12 @@ async function handleGeneralQuestion(
 شخصيتك: ودود، محترف، ومباشر. استخدم اللغة العربية الفصحى البسيطة.
 
 قواعدك الأساسية:
-1. **كن موجزاً**: لا تزيد ردودك عن ٣ جمل، إلا إذا طلب العميل تفاصيل إضافية.
+1. **كن موجزاً**: لا تزيد ردودك عن ٣ جمل.
 2. **لا تكرر المعلومات**: إذا سبق وأن قدمت معلومات، لا تعيدها إلا إذا طُلب منك ذلك.
-3. **التعامل مع الأخطاء الإملائية**: حاول فهم المعنى المقصود وقدم إجابة مفيدة.
-4. **آلية التراجع**: إذا لم تكن متأكداً من الإجابة، اعترف بذلك وقل "لا أملك هذه المعلومة حالياً".
-5. **إذا كان السؤال عن سياسات الشركة**: استخدم المعلومات الرسمية من قاعدة المعرفة.
-6. **تذكر السياق**: استخدم المعلومات التالية عن المحادثة الحالية لتقديم إجابة أفضل.
+3. **التعامل مع الأخطاء الإملائية**: حاول فهم المعنى المقصود.
+4. **آلية التراجع**: إذا لم تكن متأكداً من الإجابة، اعترف بذلك.
+5. **إذا كان السؤال عن سياسات الشركة**: استخدم المعلومات الرسمية.
+6. **تذكر السياق**: استخدم المعلومات التالية عن المحادثة الحالية.
 
 ${historyContext ? `\n${historyContext}` : ''}
 ${contextInfo ? `\nمعلومات السياق الحالي:${contextInfo}` : ''}
@@ -966,7 +984,7 @@ ${contextInfo ? `\nمعلومات السياق الحالي:${contextInfo}` : ''
 }
 
 // ============================================================
-// ٩. جلب المحادثات السابقة
+// ١٠. جلب المحادثات السابقة
 // ============================================================
 app.get('/api/conversations', async (c) => {
   try {
