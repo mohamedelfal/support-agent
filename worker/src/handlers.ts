@@ -1,5 +1,5 @@
 /**
- * معالجة الأسئلة العامة
+ * معالجة الأسئلة العامة مع نظام Prompt قصير
  */
 
 import { Env } from './env';
@@ -13,6 +13,7 @@ export async function handleGeneralQuestion(
   question: string,
   context: ConversationContext
 ): Promise<Response> {
+  // جلب آخر 3 محادثات فقط للسياق
   const history = await db
     .prepare(
       'SELECT message, response FROM conversations WHERE user_id = ? ORDER BY created_at DESC LIMIT 3'
@@ -23,31 +24,27 @@ export async function handleGeneralQuestion(
   let historyContext = '';
   if (history.results && history.results.length > 0) {
     const reversed = history.results.reverse();
-    historyContext = 'المحادثات السابقة (آخر 3 رسائل):\n';
+    historyContext = 'المحادثات السابقة:\n';
     for (const rec of reversed) {
       historyContext += `- س: ${rec.message}\n- ج: ${rec.response}\n`;
     }
   }
 
-  let contextInfo = '';
-  if (context.pendingGoal) {
-    contextInfo += `\nالهدف الحالي للعميل: ${context.pendingGoal}`;
-  }
-  if (context.orderNumber) {
-    contextInfo += `\nرقم الطلب المذكور: ${context.orderNumber}`;
-  }
-  if (context.issueDescription) {
-    contextInfo += `\nوصف المشكلة: ${context.issueDescription}`;
+  // System Prompt قصير
+  let systemPrompt = getGeneralSystemPrompt();
+  
+  // إضافة السياق إذا وجد
+  if (historyContext) {
+    systemPrompt += `\n\n${historyContext}`;
   }
 
-  const systemPrompt = getGeneralSystemPrompt(historyContext, contextInfo);
-  const fullPrompt = `${systemPrompt}\n\n${question}`;
+  const fullPrompt = `${systemPrompt}\n\nسؤال العميل: ${question}`;
 
   let aiResponse;
   try {
     aiResponse = await c.env.AI.run('@cf/meta/llama-3.2-3b-instruct', {
       messages: [{ role: 'user', content: fullPrompt }],
-      temperature: 0.7,
+      temperature: 0.5, // أقل من السابق للدقة
       max_tokens: 256,
       repetition_penalty: 1.1,
     });
