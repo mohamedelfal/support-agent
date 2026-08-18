@@ -1,6 +1,5 @@
 /**
  * نقطة الدخول الرئيسية للـ Worker
- * تستخدم Hono لتوجيه الطلبات إلى وكيل Think
  */
 
 import { Hono } from 'hono';
@@ -8,7 +7,6 @@ import { cors } from 'hono/cors';
 import { sign, verify } from 'hono/jwt';
 import { KairosAgent } from './agent';
 
-// ✅ إعادة تصدير الكلاس المطلوب لـ Durable Objects
 export { KairosAgent };
 
 export type Env = {
@@ -210,37 +208,109 @@ app.get('/api/chat', async (c) => {
     return agent.fetch(c.req.raw);
   } catch (e) {
     console.error('❌ Chat error:', e);
-    return c.json({ error: 'Internal error' }, 500);
+    const errorMessage = e instanceof Error ? e.message : 'Unknown error';
+    return c.json({ error: `WebSocket error: ${errorMessage}` }, 500);
   }
 });
 
 // ============================================================
-// ٦. نقطة /ask - للتوافق مع الواجهة الحالية
+// ٦. نقطة /ask - مع عرض تفاصيل الخطأ
 // ============================================================
 app.post('/api/ask', async (c) => {
   try {
     const auth = c.req.header('Authorization');
-    if (!auth) return c.json({ error: 'Unauthorized' }, 401);
+    if (!auth) {
+      return c.json({ 
+        answer: '⚠️ خطأ: لم يتم إرسال رمز المصادقة (Authorization header missing).'
+      }, 200);
+    }
 
     const token = auth.replace('Bearer ', '');
-    const payload = await verify(token, c.env.JWT_SECRET, 'HS256');
-    if (!payload.sub) return c.json({ error: 'Invalid token payload' }, 401);
+    let payload;
+    try {
+      payload = await verify(token, c.env.JWT_SECRET, 'HS256');
+    } catch (verifyError) {
+      const msg = verifyError instanceof Error ? verifyError.message : 'Invalid token';
+      return c.json({ 
+        answer: `⚠️ خطأ في المصادقة: ${msg}`
+      }, 200);
+    }
+
+    if (!payload.sub) {
+      return c.json({ 
+        answer: '⚠️ خطأ: رمز المصادقة لا يحتوي على معرف المستخدم (sub).'
+      }, 200);
+    }
 
     const userId = payload.sub;
     const { question } = await c.req.json();
-    if (!question) return c.json({ error: 'Question required' }, 400);
+    if (!question) {
+      return c.json({ 
+        answer: '⚠️ خطأ: لم يتم إرسال سؤال (question).'
+      }, 200);
+    }
 
-    const agentId = `user-${userId}`;
-    const agent = c.env.KAIROS_AGENT.get(
-      c.env.KAIROS_AGENT.idFromName(agentId)
-    );
+    // محاولة استدعاء الوكيل عبر WebSocket داخلياً
+    try {
+      const agentId = `user-${userId}`;
+      const agent = c.env.KAIROS_AGENT.get(
+        c.env.KAIROS_AGENT.idFromName(agentId)
+      );
 
-    // ✅ استخدام agent.chat() بشكل صحيح
-    const result = await agent.chat(question);
-    return c.json({ answer: result });
+      // محاكاة طلب WebSocket عبر fetch
+      const wsUrl = new URL('/api/chat', c.req.url);
+      wsUrl.search = `?userId=${userId}`;
+      
+      // إنشاء طلب داخلي لـ WebSocket
+      const internalReq = new Request(wsUrl.toString(), {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Upgrade': 'websocket',
+          'Connection': 'Upgrade',
+        },
+      });
+
+      // لا يمكن استخدام fetch داخلياً لتوجيه WebSocket، لذلك نستخدم agent.chat() إذا كانت متوفرة
+      // في Think، يمكن استخدام agent.chat() مباشرة
+      let result;
+      if (typeof agent.chat === 'function') {
+        // استخدام agent.chat() إذا كانت متوفرة
+        result = await agent.chat(question);
+      } else {
+        // بديل: استخدام fetch مع محاكاة WebSocket عبر HTTP
+        // نقوم بإنشاء طلب POST داخلي لـ WebSocket
+        const chatReq = new Request('https://internal/chat', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            messages: [{ role: 'user', content: question }]
+          })
+        });
+        const chatResponse = await agent.fetch(chatReq);
+        const data = await chatResponse.json();
+        result = data?.messages?.[data.messages.length - 1]?.content || 'لم أستطع معالجة طلبك.';
+      }
+
+      return c.json({ answer: result });
+    } catch (agentError) {
+      const errorMessage = agentError instanceof Error ? agentError.message : 'Unknown error';
+      const errorStack = agentError instanceof Error ? agentError.stack : '';
+      console.error('❌ Agent error:', agentError);
+      
+      return c.json({ 
+        answer: `⚠️ حدث خطأ في الوكيل:\n\n📋 **تفاصيل الخطأ:**\n- **النوع:** ${agentError instanceof Error ? agentError.constructor.name : 'Unknown'}\n- **الرسالة:** ${errorMessage}\n${errorStack ? `- **المكدس:** ${errorStack.split('\n').slice(0, 3).join('\n')}` : ''}\n\nيرجى إرسال هذه التفاصيل لفريق الدعم.`
+      }, 200);
+    }
   } catch (e) {
+    const errorMessage = e instanceof Error ? e.message : 'Unknown error';
     console.error('❌ Ask error:', e);
-    return c.json({ answer: '⚠️ عذراً، حدث خطأ في النظام.' }, 200);
+    return c.json({ 
+      answer: `⚠️ حدث خطأ في النظام:\n\n📋 **تفاصيل الخطأ:**\n- **النوع:** ${e instanceof Error ? e.constructor.name : 'Unknown'}\n- **الرسالة:** ${errorMessage}`
+    }, 200);
   }
 });
 
