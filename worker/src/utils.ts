@@ -1,6 +1,5 @@
-
 /**
- * دوال مساعدة: استخراج الأرقام، البريد الإلكتروني، كشف النية
+ * دوال مساعدة محسّنة
  */
 
 import { ConversationContext } from './sessions';
@@ -23,9 +22,6 @@ export function extractEmail(text: string): string | null {
   return match ? match[0] : null;
 }
 
-/**
- * كشف نية المستخدم بشكل متقدم
- */
 export function detectIntent(
   question: string,
   context: ConversationContext
@@ -67,8 +63,11 @@ export function detectIntent(
     return { type: 'password_choice', data: { choice: numberMatch[1] } };
   }
 
-  // 4. كشف الأسئلة العامة
-  const generalKeywords = ['ما هو', 'ما هي', 'ماذا', 'شرح', 'معنى', 'تعريف', 'ما دور', 'ما وظيفة', 'اقدم', 'اشهر'];
+  // 4. كشف الأسئلة العامة (مع إضافة كلمات جديدة)
+  const generalKeywords = [
+    'ما هو', 'ما هي', 'ماذا', 'شرح', 'معنى', 'تعريف', 'ما دور', 'ما وظيفة',
+    'اقدم', 'اشهر', 'أقدم', 'أشهر', 'محافظة', 'بحيرة', 'نهر', 'جبل', 'صحراء'
+  ];
   if (generalKeywords.some(k => lower.includes(k))) {
     return { type: 'knowledge' };
   }
@@ -89,7 +88,7 @@ export function detectIntent(
     return { type: 'update_email' };
   }
 
-  // 7. كشف تحديث بيانات عامة
+  // 7. كشف تحديث بيانات عامة (بدون بريد)
   if (hasUpdate && !hasEmail) {
     const profileKeywords = ['بيانات', 'حساب', 'معلومات', 'ملفي', 'بروفايل'];
     if (profileKeywords.some(k => lower.includes(k))) {
