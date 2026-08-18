@@ -7,6 +7,7 @@ import { cors } from 'hono/cors';
 import { sign, verify } from 'hono/jwt';
 import { KairosAgent } from './agent';
 
+// ✅ تصدير الكلاس لـ Durable Objects
 export { KairosAgent };
 
 export type Env = {
@@ -201,6 +202,14 @@ app.get('/api/chat', async (c) => {
 
     const userId = payload.sub;
     const agentId = `user-${userId}`;
+    
+    // ✅ التحقق من وجود الـ binding
+    if (!c.env.KAIROS_AGENT) {
+      return c.json({ 
+        error: 'KAIROS_AGENT binding not found. Please check wrangler.jsonc configuration.' 
+      }, 500);
+    }
+    
     const agent = c.env.KAIROS_AGENT.get(
       c.env.KAIROS_AGENT.idFromName(agentId)
     );
@@ -250,36 +259,25 @@ app.post('/api/ask', async (c) => {
       }, 200);
     }
 
-    // محاولة استدعاء الوكيل عبر WebSocket داخلياً
+    // التحقق من وجود الـ binding
+    if (!c.env.KAIROS_AGENT) {
+      return c.json({ 
+        answer: '⚠️ خطأ في التكوين: KAIROS_AGENT غير موجود. تأكد من إعدادات wrangler.jsonc.'
+      }, 200);
+    }
+
     try {
       const agentId = `user-${userId}`;
       const agent = c.env.KAIROS_AGENT.get(
         c.env.KAIROS_AGENT.idFromName(agentId)
       );
 
-      // محاكاة طلب WebSocket عبر fetch
-      const wsUrl = new URL('/api/chat', c.req.url);
-      wsUrl.search = `?userId=${userId}`;
-      
-      // إنشاء طلب داخلي لـ WebSocket
-      const internalReq = new Request(wsUrl.toString(), {
-        method: 'GET',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Upgrade': 'websocket',
-          'Connection': 'Upgrade',
-        },
-      });
-
-      // لا يمكن استخدام fetch داخلياً لتوجيه WebSocket، لذلك نستخدم agent.chat() إذا كانت متوفرة
-      // في Think، يمكن استخدام agent.chat() مباشرة
+      // استخدام agent.chat() مباشرة
       let result;
       if (typeof agent.chat === 'function') {
-        // استخدام agent.chat() إذا كانت متوفرة
         result = await agent.chat(question);
       } else {
-        // بديل: استخدام fetch مع محاكاة WebSocket عبر HTTP
-        // نقوم بإنشاء طلب POST داخلي لـ WebSocket
+        // بديل: استخدام fetch
         const chatReq = new Request('https://internal/chat', {
           method: 'POST',
           headers: {
