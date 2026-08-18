@@ -11,9 +11,17 @@ import { getOrderStatusTool, createTicketAction, updateEmailAction } from './too
 
 export class KairosAgent extends Think<Env> {
   getModel() {
-    return createWorkersAI({ binding: this.env.AI })(
-      '@cf/meta/llama-3.2-3b-instruct'
-    );
+    try {
+      return createWorkersAI({ binding: this.env.AI })(
+        '@cf/meta/llama-3.2-3b-instruct'
+      );
+    } catch (error) {
+      console.error('❌ getModel error:', error);
+      // نموذج احتياطي
+      return createWorkersAI({ binding: this.env.AI })(
+        '@cf/mistral/mistral-small-3.1-24b-instruct'
+      );
+    }
   }
 
   getSystemPrompt() {
@@ -58,6 +66,20 @@ export class KairosAgent extends Think<Env> {
     };
   }
 
-  maxSteps = 5;
+  // تفعيل استرداد المحادثة تلقائياً (Chat Recovery)
   chatRecovery = true;
+
+  // عدد الخطوات القصوى للوكيل (منع الحلقات اللانهائية)
+  maxSteps = 5;
+
+  // معالجة أخطاء السياق الزائد
+  contextOverflow = {
+    reactive: true,
+    classifyChatError: (error: any) => {
+      if (error.message?.includes('context') || error.message?.includes('token')) {
+        return 'context_overflow';
+      }
+      return null;
+    },
+  };
 }
