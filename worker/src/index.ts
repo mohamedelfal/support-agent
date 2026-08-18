@@ -1,16 +1,14 @@
 /**
  * وكيل دعم عملاء - Kairos
  * 
- * المدخل الرئيسي للتطبيق
  * المطور: محمد عنتر الفل (Mohamed Antar Elfal)
  * 
  * الميزات:
- * - خوارزميات تأكيد قبل تنفيذ الأدوات
- * - إدارة التذاكر المفتوحة
- * - كشف السياق والخروج من الجلسات العالقة
- * - تحسين اللغة العربية ومنع خلط اللغات
- * - RAG مع Embeddings
- * - هيكلة الكود إلى ملفات منفصلة
+ * - System Prompt قصير ومركز
+ * - كشف نية محسّن
+ * - خروج تلقائي من الجلسات العالقة عند تغيير الموضوع
+ * - لغة عربية فصحى فقط
+ * - دقة في المعلومات مع الاعتراف بعدم المعرفة
  */
 
 import { Hono } from 'hono';
@@ -154,86 +152,120 @@ app.post('/api/ask', async (c) => {
       });
     }
 
-    // معالجة النية الجديدة
+    // 🔥 معالجة النية الجديدة مع إلغاء الجلسة العالقة إذا تغير الموضوع
     const newIntentTypes: string[] = ['update_email', 'update_profile', 'track_order', 'create_ticket', 'password_reset'];
-    if (newIntentTypes.includes(intent.type)) {
+    if (newIntentTypes.includes(intent.type) || intent.type === 'knowledge' || intent.type === 'general') {
+      // إذا كانت هناك جلسة نشطة والنية مختلفة عن الجلسة، نلغي الجلسة
       if (activeSession) {
-        await deleteSession(db, activeSession.id);
+        const currentStep = activeSession.data.step;
+        // إذا كانت الجلسة في حالة انتظار (وليست idle) والنية مختلفة
+        if (currentStep !== 'idle') {
+          // إذا كانت النية جديدة (مختلفة عن الهدف الحالي)
+          const currentGoal = activeSession.data.context.pendingGoal;
+          if (currentGoal && intent.type !== currentGoal) {
+            await deleteSession(db, activeSession.id);
+          }
+        }
       }
 
-      const newSessionData: SessionData = {
-        step: 'idle',
-        context: { pendingGoal: intent.type as any },
-        data: {},
-      };
+      // بدء جلسة جديدة إذا كانت النية تتطلب جلسة
+      if (newIntentTypes.includes(intent.type)) {
+        const newSessionData: SessionData = {
+          step: 'idle',
+          context: { pendingGoal: intent.type as any },
+          data: {},
+        };
 
-      if (intent.type === 'update_email') {
-        newSessionData.step = 'awaiting_email';
-        await createSession(db, userId, newSessionData);
-        return c.json({
-          answer: '📧 الرجاء كتابة البريد الإلكتروني الجديد الذي ترغب في تحديثه.',
-        });
-      }
-
-      if (intent.type === 'update_profile') {
-        newSessionData.step = 'awaiting_clarification';
-        newSessionData.data.clarificationQuestion =
-          '📝 هل تقصد تحديث بريدك الإلكتروني، أم معلومات أخرى مثل الاسم أو رقم الهاتف؟';
-        await createSession(db, userId, newSessionData);
-        return c.json({
-          answer: newSessionData.data.clarificationQuestion,
-        });
-      }
-
-      if (intent.type === 'track_order') {
-        newSessionData.step = 'awaiting_order';
-        await createSession(db, userId, newSessionData);
-        return c.json({
-          answer: '📦 الرجاء كتابة رقم الطلب الذي ترغب في تتبعه (أرقام فقط).',
-        });
-      }
-
-      if (intent.type === 'create_ticket') {
-        const openTickets = await getOpenTickets(db, userId);
-        const ticketCount = openTickets.length;
-
-        if (ticketCount > 0) {
-          const ticketList = openTickets.map((t, i) =>
-            `- التذكرة ${i+1}: رقم ${(t.id as string).slice(0, 8)}، الموضوع: ${(t.issue as string).slice(0, 50)}`
-          ).join('\n');
-
-          newSessionData.data.existingTickets = openTickets;
-          newSessionData.context.ticketCount = ticketCount;
-          newSessionData.context.existingTickets = openTickets;
-          newSessionData.step = 'awaiting_ticket_confirm';
-
+        if (intent.type === 'update_email') {
+          newSessionData.step = 'awaiting_email';
           await createSession(db, userId, newSessionData);
           return c.json({
-            answer: `📋 لديك ${ticketCount} تذكرة مفتوحة حالياً:\n${ticketList}\n\nهل تريد إنشاء تذكرة جديدة لمشكلة مختلفة عن هذه التذاكر؟ (أجب بـ "نعم" أو "لا")`
+            answer: '📧 الرجاء كتابة البريد الإلكتروني الجديد الذي ترغب في تحديثه.',
           });
-        } else {
-          newSessionData.step = 'awaiting_ticket_issue';
+        }
+
+        if (intent.type === 'update_profile') {
+          newSessionData.step = 'awaiting_clarification';
+          newSessionData.data.clarificationQuestion =
+            '📝 هل تقصد تحديث بريدك الإلكتروني، أم معلومات أخرى مثل الاسم أو رقم الهاتف؟';
           await createSession(db, userId, newSessionData);
           return c.json({
-            answer: '📌 الرجاء كتابة وصف المشكلة التي تواجهها بالتفصيل.',
+            answer: newSessionData.data.clarificationQuestion,
+          });
+        }
+
+        if (intent.type === 'track_order') {
+          newSessionData.step = 'awaiting_order';
+          await createSession(db, userId, newSessionData);
+          return c.json({
+            answer: '📦 الرجاء كتابة رقم الطلب الذي ترغب في تتبعه (أرقام فقط).',
+          });
+        }
+
+        if (intent.type === 'create_ticket') {
+          const openTickets = await getOpenTickets(db, userId);
+          const ticketCount = openTickets.length;
+
+          if (ticketCount > 0) {
+            const ticketList = openTickets.map((t, i) =>
+              `- التذكرة ${i+1}: رقم ${(t.id as string).slice(0, 8)}، الموضوع: ${(t.issue as string).slice(0, 50)}`
+            ).join('\n');
+
+            newSessionData.data.existingTickets = openTickets;
+            newSessionData.context.ticketCount = ticketCount;
+            newSessionData.context.existingTickets = openTickets;
+            newSessionData.step = 'awaiting_ticket_confirm';
+
+            await createSession(db, userId, newSessionData);
+            return c.json({
+              answer: `📋 لديك ${ticketCount} تذكرة مفتوحة حالياً:\n${ticketList}\n\nهل تريد إنشاء تذكرة جديدة لمشكلة مختلفة عن هذه التذاكر؟ (أجب بـ "نعم" أو "لا")`
+            });
+          } else {
+            newSessionData.step = 'awaiting_ticket_issue';
+            await createSession(db, userId, newSessionData);
+            return c.json({
+              answer: '📌 الرجاء كتابة وصف المشكلة التي تواجهها بالتفصيل.',
+            });
+          }
+        }
+
+        if (intent.type === 'password_reset') {
+          newSessionData.step = 'awaiting_password_choice';
+          await createSession(db, userId, newSessionData);
+          return c.json({
+            answer: '🔑 هل تريد:\n١. تغيير كلمة المرور (طريقة جديدة)\n٢. استرجاع كلمة المرور (إرسال رابط للبريد المسجل)\nالرجاء اختيار الرقم (١ أو ٢)',
           });
         }
       }
 
-      if (intent.type === 'password_reset') {
-        newSessionData.step = 'awaiting_password_choice';
-        await createSession(db, userId, newSessionData);
-        return c.json({
-          answer: '🔑 هل تريد:\n١. تغيير كلمة المرور (طريقة جديدة)\n٢. استرجاع كلمة المرور (إرسال رابط للبريد المسجل)\nالرجاء اختيار الرقم (١ أو ٢)',
-        });
+      // إذا كانت النية معرفية أو عامة، نتعامل معها مباشرة
+      if (intent.type === 'knowledge') {
+        const knowledgeResponse = await handleKnowledgeQuestion(c, db, userId, question);
+        if (knowledgeResponse) return knowledgeResponse;
+        return await handleGeneralQuestion(c, db, userId, question, currentContext);
+      }
+
+      if (intent.type === 'general') {
+        return await handleGeneralQuestion(c, db, userId, question, currentContext);
       }
     }
 
-    // معالجة الجلسة النشطة
+    // معالجة الجلسة النشطة (إذا لم يتم إلغاؤها)
     if (activeSession) {
       const session = activeSession;
       const sessionData = session.data;
       const currentStep = sessionData.step;
+
+      // التحقق من تغيير الموضوع داخل الجلسة (لحالات مثل "نعم" / "لا")
+      if (intent.type === 'knowledge' || intent.type === 'general') {
+        // إذا كان السؤال العام غير مرتبط بالجلسة، نلغي الجلسة ونجيب
+        await deleteSession(db, session.id);
+        if (intent.type === 'knowledge') {
+          const knowledgeResponse = await handleKnowledgeQuestion(c, db, userId, question);
+          if (knowledgeResponse) return knowledgeResponse;
+        }
+        return await handleGeneralQuestion(c, db, userId, question, {});
+      }
 
       // --- حالة اختيار كلمة المرور ---
       if (currentStep === 'awaiting_password_choice') {
@@ -261,11 +293,6 @@ app.post('/api/ask', async (c) => {
               answer: '⚠️ لم أفهم اختيارك. الرجاء اختيار ١ أو ٢.',
             });
           }
-        } else if (intent.type === 'general' || intent.type === 'knowledge') {
-          await deleteSession(db, session.id);
-          const knowledgeResponse = await handleKnowledgeQuestion(c, db, userId, question);
-          if (knowledgeResponse) return knowledgeResponse;
-          return await handleGeneralQuestion(c, db, userId, question, {});
         } else {
           return c.json({
             answer: '⚠️ الرجاء اختيار ١ أو ٢.',
@@ -369,11 +396,6 @@ app.post('/api/ask', async (c) => {
           return c.json({
             answer: `📧 تم استلام البريد: ${email}. تم إرسال كود تحقق وهمي: ${code}. أرسل الكود للتأكيد.`,
           });
-        } else if (intent.type === 'general' || intent.type === 'knowledge') {
-          await deleteSession(db, session.id);
-          const knowledgeResponse = await handleKnowledgeQuestion(c, db, userId, question);
-          if (knowledgeResponse) return knowledgeResponse;
-          return await handleGeneralQuestion(c, db, userId, question, {});
         } else {
           return c.json({
             answer: '⚠️ بريد إلكتروني غير صالح. حاول مرة أخرى (مثال: name@domain.com)، أو اكتب "إلغاء" للخروج.',
@@ -405,11 +427,6 @@ app.post('/api/ask', async (c) => {
               answer: '⚠️ الكود غير صحيح. حاول مرة أخرى أو اكتب "إلغاء".',
             });
           }
-        } else if (intent.type === 'general' || intent.type === 'knowledge') {
-          await deleteSession(db, session.id);
-          const knowledgeResponse = await handleKnowledgeQuestion(c, db, userId, question);
-          if (knowledgeResponse) return knowledgeResponse;
-          return await handleGeneralQuestion(c, db, userId, question, {});
         } else {
           return c.json({
             answer: '⚠️ يرجى إدخال الكود المكون من 6 أرقام، أو اكتب "إلغاء" للخروج.',
@@ -428,11 +445,6 @@ app.post('/api/ask', async (c) => {
           return c.json({
             answer: `🔍 هل رقم الطلب ${order} هو الصحيح؟ أجب بـ "نعم" أو "لا".`,
           });
-        } else if (intent.type === 'general' || intent.type === 'knowledge') {
-          await deleteSession(db, session.id);
-          const knowledgeResponse = await handleKnowledgeQuestion(c, db, userId, question);
-          if (knowledgeResponse) return knowledgeResponse;
-          return await handleGeneralQuestion(c, db, userId, question, {});
         } else {
           return c.json({
             answer: '⚠️ رقم طلب غير صالح. يجب أن يكون 4 أرقام أو أكثر، أو اكتب "إلغاء" للخروج.',
@@ -454,9 +466,13 @@ app.post('/api/ask', async (c) => {
           return c.json({ answer: result });
         } else {
           await deleteSession(db, session.id);
-          if (intent.type === 'general' || intent.type === 'knowledge') {
+          // نتحقق إذا كان هناك سؤال جديد
+          const newIntent = detectIntent(question, {});
+          if (newIntent.type === 'knowledge') {
             const knowledgeResponse = await handleKnowledgeQuestion(c, db, userId, question);
             if (knowledgeResponse) return knowledgeResponse;
+          }
+          if (newIntent.type === 'general') {
             return await handleGeneralQuestion(c, db, userId, question, {});
           }
           return c.json({
@@ -493,15 +509,14 @@ app.post('/api/ask', async (c) => {
     }
 
     // ============================================================
-    // 3. الحالة العامة
+    // الحالة النهائية: إذا لم يتم التعامل مع السؤال
     // ============================================================
-
-    // الأسئلة المعرفية
+    // محاولة المعرفة أولاً
     const knowledgeResponse = await handleKnowledgeQuestion(c, db, userId, question);
     if (knowledgeResponse) return knowledgeResponse;
 
-    // الأسئلة العامة
-    return await handleGeneralQuestion(c, db, userId, question, currentContext);
+    // ثم الأسئلة العامة
+    return await handleGeneralQuestion(c, db, userId, question, {});
   } catch (e) {
     console.error('❌ Ask error:', e);
     return c.json({ answer: '⚠️ عذراً، حدث خطأ في النظام. حاول مرة أخرى.' }, 200);
