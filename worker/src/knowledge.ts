@@ -2,8 +2,8 @@
  * نظام RAG (Retrieval-Augmented Generation)
  * 
  * استراتيجية البحث:
- * 1. بحث نصي تقليدي (LIKE) مع دعم الأخطاء الإملائية
- * 2. بحث بالتضمين (Embeddings) إذا لم نجد نتيجة
+ * 1. بحث نصي تقليدي (LIKE) في question و keywords
+ * 2. بحث بالتضمين (Embeddings) مع توليد تلقائي للتضمينات المفقودة
  * 3. ردود احتياطية (Fallback) للأسئلة الشائعة
  */
 
@@ -39,12 +39,53 @@ export function cosineSimilarity(a: number[], b: number[]): number {
 }
 
 /**
+ * توليد Embedding لسؤال معين وحفظه في قاعدة البيانات
+ */
+async function ensureEmbedding(
+  db: D1Database,
+  recordId: string,
+  question: string,
+  env: Env
+): Promise<number[]> {
+  // جلب السجل الحالي
+  const record = await db
+    .prepare('SELECT embedding FROM knowledge WHERE id = ?')
+    .bind(recordId)
+    .first();
+  
+  if (!record) return [];
+  
+  const currentEmbedding = (record as any).embedding;
+  
+  // إذا كان التضمين موجوداً وغير فارغ، نعيده
+  if (currentEmbedding && currentEmbedding !== '[]') {
+    try {
+      return JSON.parse(currentEmbedding);
+    } catch {
+      // إذا كان التضمين غير صالح، نستمر لتوليد جديد
+    }
+  }
+  
+  // توليد تضمين جديد
+  const embedding = await generateEmbedding(question, env);
+  
+  // حفظ التضمين في قاعدة البيانات
+  await db
+    .prepare('UPDATE knowledge SET embedding = ? WHERE id = ?')
+    .bind(JSON.stringify(embedding), recordId)
+    .run();
+  
+  console.log(`✅ Generated embedding for record ${recordId}`);
+  return embedding;
+}
+
+/**
  * معالجة الأسئلة المعرفية (RAG)
  * 
- * استراتيجية بحث مزدوجة:
- * 1. بحث نصي تقليدي (LIKE) - سريع وموثوق
- * 2. بحث بالتضمين (Embeddings) - للمرونة
- * 3. ردود احتياطية (Fallback) للأسئلة الشائعة
+ * استراتيجية البحث المزدوجة:
+ * 1. بحث نصي (LIKE) - أولاً
+ * 2. بحث بالتضمين (Embeddings) - مع توليد تلقائي للمفقود
+ * 3. ردود احتياطية (Fallback)
  */
 export async function handleKnowledgeQuestion(
   c: any,
@@ -59,11 +100,12 @@ export async function handleKnowledgeQuestion(
     // ============================================================
     const words = question.split(' ').filter((w: string) => w.length > 2);
     let textMatch = null;
+    let matchedId = null;
     
     for (const word of words) {
       const result = await db
         .prepare(
-          `SELECT answer FROM knowledge 
+          `SELECT id, answer FROM knowledge 
            WHERE question LIKE ? OR keywords LIKE ? 
            LIMIT 1`
         )
@@ -72,12 +114,19 @@ export async function handleKnowledgeQuestion(
       
       if (result.results && result.results.length > 0) {
         textMatch = result.results[0].answer as string;
+        matchedId = result.results[0].id as string;
         break;
       }
     }
 
-    // إذا وجدنا تطابقاً نصياً، نعيد الإجابة فوراً
+    // إذا وجدنا تطابقاً نصياً
     if (textMatch) {
+      // التأكد من وجود تضمين لهذا السجل (للاستخدام المستقبلي)
+      if (matchedId) {
+        // نقوم بتوليد التضمين في الخلفية (لا ننتظره)
+        ensureEmbedding(db, matchedId, question, c.env).catch(console.error);
+      }
+      
       await db
         .prepare(
           'INSERT INTO conversations (id, user_id, message, response, created_at) VALUES (?, ?, ?, ?, ?)'
@@ -102,7 +151,21 @@ export async function handleKnowledgeQuestion(
 
     if (questionEmbedding.length > 0 && allKnowledge.results) {
       for (const record of allKnowledge.results) {
-        const recordEmbedding = record.embedding ? JSON.parse(record.embedding as string) : [];
+        // التأكد من وجود تضمين، وإذا لم يكن موجوداً نقوم بتوليده
+        let recordEmbedding: number[] = [];
+        if (record.embedding && record.embedding !== '[]') {
+          try {
+            recordEmbedding = JSON.parse(record.embedding as string);
+          } catch {
+            recordEmbedding = [];
+          }
+        }
+        
+        // إذا لم يكن هناك تضمين، نولده
+        if (recordEmbedding.length === 0) {
+          recordEmbedding = await ensureEmbedding(db, record.id as string, record.question as string, c.env);
+        }
+        
         if (recordEmbedding.length > 0) {
           const similarity = cosineSimilarity(questionEmbedding, recordEmbedding);
           if (similarity > highestSimilarity) {
