@@ -2,8 +2,9 @@
  * نظام RAG (Retrieval-Augmented Generation)
  * 
  * استراتيجية البحث:
- * 1. بحث نصي تقليدي (LIKE) في question و keywords
+ * 1. بحث نصي تقليدي (LIKE) مع دعم الأخطاء الإملائية
  * 2. بحث بالتضمين (Embeddings) إذا لم نجد نتيجة
+ * 3. ردود احتياطية (Fallback) للأسئلة الشائعة
  */
 
 import { Env } from './env';
@@ -43,6 +44,7 @@ export function cosineSimilarity(a: number[], b: number[]): number {
  * استراتيجية بحث مزدوجة:
  * 1. بحث نصي تقليدي (LIKE) - سريع وموثوق
  * 2. بحث بالتضمين (Embeddings) - للمرونة
+ * 3. ردود احتياطية (Fallback) للأسئلة الشائعة
  */
 export async function handleKnowledgeQuestion(
   c: any,
@@ -96,7 +98,7 @@ export async function handleKnowledgeQuestion(
 
     let bestMatch: any = null;
     let highestSimilarity = -1;
-    const THRESHOLD = 0.4; // عتبة أقل لتشمل المزيد من التطابقات
+    const THRESHOLD = 0.4;
 
     if (questionEmbedding.length > 0 && allKnowledge.results) {
       for (const record of allKnowledge.results) {
@@ -123,11 +125,12 @@ export async function handleKnowledgeQuestion(
     }
 
     // ============================================================
-    // 3. إذا لم نجد أي تطابق - ردود احتياطية (Fallback)
+    // 3. ردود احتياطية (Fallback) - للأسئلة الشائعة
     // ============================================================
     
     // سياسة الارتجاع
-    if (intentType === 'return_policy' || question.includes('سياسة') && (question.includes('استرجاع') || question.includes('ارتجاع'))) {
+    if (intentType === 'return_policy' || 
+        (question.includes('سياسة') && (question.includes('استرجاع') || question.includes('ارتجاع')))) {
       const fallbackAnswer = '📋 سياسة الارتجاع لدينا: يمكنك إرجاع المنتج خلال ١٤ يوم من تاريخ الاستلام، بشرط أن يكون بحالته الأصلية مع العبوة والملحقات. يرجى التواصل مع فريق الدعم لبدء إجراءات الارجاع.';
       await db
         .prepare(
@@ -151,8 +154,21 @@ export async function handleKnowledgeQuestion(
     }
 
     // مدة الشحن
-    if (question.includes('يستغرق') || question.includes('مدة') || question.includes('وقت') || question.includes('شحن') || question.includes('وصول')) {
+    if (question.includes('يستغرق') || question.includes('مدة') || question.includes('وقت') || 
+        question.includes('شحن') || question.includes('وصول')) {
       const fallbackAnswer = '⏳ عادةً ما يستغرق وصول الطلب من ٣ إلى ٥ أيام عمل من تاريخ الشراء. يتم إرسال رقم تتبع على البريد الإلكتروني عند الشحن.';
+      await db
+        .prepare(
+          'INSERT INTO conversations (id, user_id, message, response, created_at) VALUES (?, ?, ?, ?, ?)'
+        )
+        .bind(crypto.randomUUID(), userId, question, fallbackAnswer, new Date().toISOString())
+        .run();
+      return c.json({ answer: fallbackAnswer });
+    }
+
+    // الأسئلة العامة (معرفة عامة)
+    if (question.includes('بحيرة') || question.includes('نهر') || question.includes('جبل') || question.includes('محافظة')) {
+      const fallbackAnswer = '🌍 هذا سؤال عام. ليس لدي معلومات دقيقة عن ذلك، لكن يمكنني مساعدتك في الأسئلة المتعلقة بالدعم الفني.';
       await db
         .prepare(
           'INSERT INTO conversations (id, user_id, message, response, created_at) VALUES (?, ?, ?, ?, ?)'
