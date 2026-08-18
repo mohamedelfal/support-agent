@@ -14,7 +14,9 @@
     "workers-ai-provider": "latest",
     "zod": "^3.23.8",
     "@cloudflare/shell": "latest",
-    "hono": "^4.6.15"
+    "hono": "^4.6.15",
+    "@modelcontextprotocol/client": "2.0.0",
+    "@modelcontextprotocol/sdk": "1.30.0"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260815.1",
