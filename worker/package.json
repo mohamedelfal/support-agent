@@ -1,0 +1,23 @@
+{
+  "name": "support-agent",
+  "version": "2.0.0",
+  "type": "module",
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev"
+  },
+  "dependencies": {
+    "@cloudflare/think": "latest",
+    "@cloudflare/ai-chat": "latest",
+    "agents": "latest",
+    "ai": "^6.0.0",
+    "workers-ai-provider": "latest",
+    "zod": "^3.23.8",
+    "@cloudflare/shell": "latest",
+    "hono": "^4.6.15"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260815.1",
+    "wrangler": "^4.123.0"
+  }
+}
