@@ -1,8 +1,48 @@
 /**
  * دوال مساعدة محسّنة
+ * - استخراج الأرقام والبريد الإلكتروني
+ * - كشف النية مع دعم الأخطاء الإملائية
  */
 
 import { ConversationContext } from './sessions';
+
+/**
+ * حساب التشابه بين كلمتين باستخدام مسافة ليفنشتاين
+ */
+function levenshteinDistance(a: string, b: string): number {
+  const matrix: number[][] = [];
+  for (let i = 0; i <= b.length; i++) {
+    matrix[i] = [i];
+  }
+  for (let j = 0; j <= a.length; j++) {
+    matrix[0][j] = j;
+  }
+  for (let i = 1; i <= b.length; i++) {
+    for (let j = 1; j <= a.length; j++) {
+      if (b[i - 1] === a[j - 1]) {
+        matrix[i][j] = matrix[i - 1][j - 1];
+      } else {
+        matrix[i][j] = Math.min(
+          matrix[i - 1][j - 1] + 1,
+          matrix[i][j - 1] + 1,
+          matrix[i - 1][j] + 1
+        );
+      }
+    }
+  }
+  return matrix[b.length][a.length];
+}
+
+/**
+ * التحقق من تشابه كلمتين (نسبة التشابه > 0.8)
+ */
+function isSimilar(word1: string, word2: string): boolean {
+  if (word1 === word2) return true;
+  const maxLen = Math.max(word1.length, word2.length);
+  if (maxLen === 0) return true;
+  const distance = levenshteinDistance(word1, word2);
+  return (1 - distance / maxLen) >= 0.6;
+}
 
 export function extractNumber(text: string): string | null {
   const map: Record<string, string> = {
@@ -63,44 +103,61 @@ export function detectIntent(
     return { type: 'password_choice', data: { choice: numberMatch[1] } };
   }
 
-  // 4. كشف الأسئلة العامة (مع إضافة كلمات جديدة)
+  // 4. كشف الأسئلة العامة
   const generalKeywords = [
     'ما هو', 'ما هي', 'ماذا', 'شرح', 'معنى', 'تعريف', 'ما دور', 'ما وظيفة',
     'اقدم', 'اشهر', 'أقدم', 'أشهر', 'محافظة', 'بحيرة', 'نهر', 'جبل', 'صحراء'
   ];
-  if (generalKeywords.some(k => lower.includes(k))) {
-    return { type: 'knowledge' };
+  for (const kw of generalKeywords) {
+    if (lower.includes(kw)) {
+      return { type: 'knowledge' };
+    }
   }
 
-  // 5. كشف طلب إعادة تعيين كلمة المرور
-  const passwordKeywords = ['نسيت', 'باسورد', 'كلمة السر', 'كلمة مرور', 'password', 'pass'];
-  if (passwordKeywords.some(k => lower.includes(k))) {
-    return { type: 'password_reset' };
+  // 5. كشف طلب إعادة تعيين كلمة المرور (مع دعم الأخطاء الإملائية)
+  const passwordWords = ['نسيت', 'باسورد', 'كلمة السر', 'كلمة مرور', 'password', 'pass'];
+  for (const word of question.split(' ')) {
+    for (const pw of passwordWords) {
+      if (isSimilar(word, pw) || lower.includes(pw)) {
+        return { type: 'password_reset' };
+      }
+    }
   }
 
   // 6. كشف تحديث البريد الإلكتروني
-  const updateKeywords = ['تحديث', 'تغيير', 'تعديل', 'تبديل', 'تجديد'];
-  const emailKeywords = ['بريد', 'إيميل', 'ايميل', 'email', 'الإيميل', 'الايميل'];
-  const hasUpdate = updateKeywords.some(k => lower.includes(k));
-  const hasEmail = emailKeywords.some(k => lower.includes(k));
-
+  const updateWords = ['تحديث', 'تغيير', 'تعديل', 'تبديل', 'تجديد'];
+  const emailWords = ['بريد', 'إيميل', 'ايميل', 'email', 'الإيميل', 'الايميل'];
+  let hasUpdate = false;
+  let hasEmail = false;
+  for (const word of question.split(' ')) {
+    for (const uw of updateWords) {
+      if (isSimilar(word, uw) || lower.includes(uw)) hasUpdate = true;
+    }
+    for (const ew of emailWords) {
+      if (isSimilar(word, ew) || lower.includes(ew)) hasEmail = true;
+    }
+  }
   if (hasUpdate && hasEmail) {
     return { type: 'update_email' };
   }
 
-  // 7. كشف تحديث بيانات عامة (بدون بريد)
+  // 7. كشف تحديث بيانات عامة
   if (hasUpdate && !hasEmail) {
-    const profileKeywords = ['بيانات', 'حساب', 'معلومات', 'ملفي', 'بروفايل'];
-    if (profileKeywords.some(k => lower.includes(k))) {
-      return { type: 'update_profile' };
+    const profileWords = ['بيانات', 'حساب', 'معلومات', 'ملفي', 'بروفايل'];
+    for (const word of question.split(' ')) {
+      for (const pw of profileWords) {
+        if (isSimilar(word, pw) || lower.includes(pw)) {
+          return { type: 'update_profile' };
+        }
+      }
     }
   }
 
   // 8. كشف تتبع الطلب
-  const orderKeywords = ['طلب', 'شحنة', 'تتبع', 'Track', 'Order', 'طلبى', 'طلبي', 'شحن'];
-  const isOrderQuery = orderKeywords.some(k => lower.includes(k));
-  const shippingTimeKeywords = ['مدة', 'وقت', 'كم', 'متي', 'متى', 'يستغرق', 'استلام', 'توصيل', 'شحن', 'وصول'];
-  const isShippingTimeQuery = shippingTimeKeywords.some(k => lower.includes(k));
+  const orderWords = ['طلب', 'شحنة', 'تتبع', 'Track', 'Order', 'طلبى', 'طلبي', 'شحن'];
+  const isOrderQuery = orderWords.some(k => lower.includes(k));
+  const shippingTimeWords = ['مدة', 'وقت', 'كم', 'متي', 'متى', 'يستغرق', 'استلام', 'توصيل', 'شحن', 'وصول'];
+  const isShippingTimeQuery = shippingTimeWords.some(k => lower.includes(k));
 
   if (context.pendingGoal === 'create_ticket') {
     if (lower.includes('تتبع') && isOrderQuery) {
@@ -124,9 +181,13 @@ export function detectIntent(
   }
 
   // 11. كشف إنشاء تذكرة
-  const ticketKeywords = ['تذكرة', 'شكوى', 'مشكلة', 'دعم', 'مساعدة'];
-  if (ticketKeywords.some(k => lower.includes(k))) {
-    return { type: 'create_ticket' };
+  const ticketWords = ['تذكرة', 'شكوى', 'مشكلة', 'دعم', 'مساعدة'];
+  for (const word of question.split(' ')) {
+    for (const tw of ticketWords) {
+      if (isSimilar(word, tw) || lower.includes(tw)) {
+        return { type: 'create_ticket' };
+      }
+    }
   }
 
   // 12. كشف البريد الإلكتروني
