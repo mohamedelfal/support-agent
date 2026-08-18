@@ -8,6 +8,9 @@ import { cors } from 'hono/cors';
 import { sign, verify } from 'hono/jwt';
 import { KairosAgent } from './agent';
 
+// ✅ إعادة تصدير الكلاس المطلوب لـ Durable Objects
+export { KairosAgent };
+
 export type Env = {
   AI: Ai;
   DB: D1Database;
