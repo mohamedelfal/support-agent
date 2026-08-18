@@ -1,5 +1,5 @@
 /**
- * معالجة الأسئلة العامة مع نظام Prompt قصير
+ * معالجة الأسئلة العامة مع نظام Prompt قصير ومركز
  */
 
 import { Env } from './env';
@@ -30,7 +30,7 @@ export async function handleGeneralQuestion(
     }
   }
 
-  // System Prompt قصير
+  // System Prompt جديد (تم تحديثه)
   let systemPrompt = getGeneralSystemPrompt();
   
   // إضافة السياق إذا وجد
@@ -44,7 +44,7 @@ export async function handleGeneralQuestion(
   try {
     aiResponse = await c.env.AI.run('@cf/meta/llama-3.2-3b-instruct', {
       messages: [{ role: 'user', content: fullPrompt }],
-      temperature: 0.5, // أقل من السابق للدقة
+      temperature: 0.5,
       max_tokens: 256,
       repetition_penalty: 1.1,
     });
