@@ -1,7 +1,9 @@
 /**
  * نظام RAG (Retrieval-Augmented Generation)
  * 
- * يحتوي على: توليد Embedding، حساب التشابه، معالجة الأسئلة المعرفية
+ * استراتيجية البحث:
+ * 1. بحث نصي تقليدي (LIKE) في question و keywords
+ * 2. بحث بالتضمين (Embeddings) إذا لم نجد نتيجة
  */
 
 import { Env } from './env';
@@ -37,6 +39,10 @@ export function cosineSimilarity(a: number[], b: number[]): number {
 
 /**
  * معالجة الأسئلة المعرفية (RAG)
+ * 
+ * استراتيجية بحث مزدوجة:
+ * 1. بحث نصي تقليدي (LIKE) - سريع وموثوق
+ * 2. بحث بالتضمين (Embeddings) - للمرونة
  */
 export async function handleKnowledgeQuestion(
   c: any,
@@ -44,20 +50,53 @@ export async function handleKnowledgeQuestion(
   userId: string,
   question: string,
   intentType?: string
-): Promise<Response> {
+): Promise<Response | null> {
   try {
-    // 1. جلب جميع سجلات المعرفة
+    // ============================================================
+    // 1. البحث النصي التقليدي (LIKE) - الأولوية الأولى
+    // ============================================================
+    const words = question.split(' ').filter((w: string) => w.length > 2);
+    let textMatch = null;
+    
+    for (const word of words) {
+      const result = await db
+        .prepare(
+          `SELECT answer FROM knowledge 
+           WHERE question LIKE ? OR keywords LIKE ? 
+           LIMIT 1`
+        )
+        .bind(`%${word}%`, `%${word}%`)
+        .all();
+      
+      if (result.results && result.results.length > 0) {
+        textMatch = result.results[0].answer as string;
+        break;
+      }
+    }
+
+    // إذا وجدنا تطابقاً نصياً، نعيد الإجابة فوراً
+    if (textMatch) {
+      await db
+        .prepare(
+          'INSERT INTO conversations (id, user_id, message, response, created_at) VALUES (?, ?, ?, ?, ?)'
+        )
+        .bind(crypto.randomUUID(), userId, question, textMatch, new Date().toISOString())
+        .run();
+      return c.json({ answer: textMatch });
+    }
+
+    // ============================================================
+    // 2. البحث بالتضمين (Embeddings) - إذا لم نجد تطابقاً نصياً
+    // ============================================================
     const allKnowledge = await db
       .prepare('SELECT id, question, answer, embedding FROM knowledge')
       .all();
 
-    // 2. توليد Embedding لسؤال العميل
     const questionEmbedding = await generateEmbedding(question, c.env);
 
-    // 3. البحث عن أفضل تطابق
     let bestMatch: any = null;
     let highestSimilarity = -1;
-    const THRESHOLD = 0.5;
+    const THRESHOLD = 0.4; // عتبة أقل لتشمل المزيد من التطابقات
 
     if (questionEmbedding.length > 0 && allKnowledge.results) {
       for (const record of allKnowledge.results) {
@@ -72,7 +111,6 @@ export async function handleKnowledgeQuestion(
       }
     }
 
-    // 4. إذا وجدنا تطابقاً
     if (bestMatch && highestSimilarity > THRESHOLD) {
       const answer = bestMatch.answer as string;
       await db
@@ -84,9 +122,13 @@ export async function handleKnowledgeQuestion(
       return c.json({ answer });
     }
 
-    // 5. سياسة الارتجاع
-    if (intentType === 'return_policy') {
-      const fallbackAnswer = '📋 سياسة الارتجاع لدينا: يمكنك إرجاع المنتج خلال ١٤ يوم من تاريخ الاستلام، بشرط أن يكون بحالته الأصلية. يرجى التواصل مع فريق الدعم لبدء إجراءات الارجاع.';
+    // ============================================================
+    // 3. إذا لم نجد أي تطابق - ردود احتياطية (Fallback)
+    // ============================================================
+    
+    // سياسة الارتجاع
+    if (intentType === 'return_policy' || question.includes('سياسة') && (question.includes('استرجاع') || question.includes('ارتجاع'))) {
+      const fallbackAnswer = '📋 سياسة الارتجاع لدينا: يمكنك إرجاع المنتج خلال ١٤ يوم من تاريخ الاستلام، بشرط أن يكون بحالته الأصلية مع العبوة والملحقات. يرجى التواصل مع فريق الدعم لبدء إجراءات الارجاع.';
       await db
         .prepare(
           'INSERT INTO conversations (id, user_id, message, response, created_at) VALUES (?, ?, ?, ?, ?)'
@@ -96,8 +138,20 @@ export async function handleKnowledgeQuestion(
       return c.json({ answer: fallbackAnswer });
     }
 
-    // 6. سياسة الشحن
-    if (intentType === 'shipping_policy') {
+    // وسائل الدفع
+    if (question.includes('دفع') || question.includes('وسائل') || question.includes('كارت') || question.includes('فيزا')) {
+      const fallbackAnswer = '💳 نقبل الدفع عن طريق: بطاقات الائتمان (Visa, Mastercard, American Express)، المحافظ الرقمية (Apple Pay, Google Pay)، والتحويل البنكي. الدفع نقداً غير متاح حالياً.';
+      await db
+        .prepare(
+          'INSERT INTO conversations (id, user_id, message, response, created_at) VALUES (?, ?, ?, ?, ?)'
+        )
+        .bind(crypto.randomUUID(), userId, question, fallbackAnswer, new Date().toISOString())
+        .run();
+      return c.json({ answer: fallbackAnswer });
+    }
+
+    // مدة الشحن
+    if (question.includes('يستغرق') || question.includes('مدة') || question.includes('وقت') || question.includes('شحن') || question.includes('وصول')) {
       const fallbackAnswer = '⏳ عادةً ما يستغرق وصول الطلب من ٣ إلى ٥ أيام عمل من تاريخ الشراء. يتم إرسال رقم تتبع على البريد الإلكتروني عند الشحن.';
       await db
         .prepare(
@@ -108,7 +162,8 @@ export async function handleKnowledgeQuestion(
       return c.json({ answer: fallbackAnswer });
     }
 
-    return null; // لم نجد إجابة، سنعود للـ General Question
+    // إذا لم نجد أي شيء
+    return null;
   } catch (error) {
     console.error('❌ Knowledge error:', error);
     return null;
