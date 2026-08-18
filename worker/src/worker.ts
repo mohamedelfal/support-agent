@@ -1,5 +1,5 @@
 /**
- * نقطة الدخول الرئيسية للـ Worker
+ * نقطة الدخول الرئيسية hhh للـ Worker
  */
 
 import { Hono } from 'hono';
