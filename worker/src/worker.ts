@@ -193,38 +193,30 @@ app.get('/api/auth/me', async (c) => {
 // ٥. نقطة WebSocket للـ Think Agent
 // ============================================================
 app.get('/api/chat', async (c) => {
-  const auth = c.req.header('Authorization');
-  if (!auth) return c.json({ error: 'Unauthorized' }, 401);
-
-  const token = auth.replace('Bearer ', '');
-  let payload;
   try {
-    payload = await verify(token, c.env.JWT_SECRET, 'HS256');
-  } catch {
-    return c.json({ error: 'Invalid token' }, 401);
+    const auth = c.req.header('Authorization');
+    if (!auth) return c.json({ error: 'Unauthorized' }, 401);
+
+    const token = auth.replace('Bearer ', '');
+    const payload = await verify(token, c.env.JWT_SECRET, 'HS256');
+    if (!payload.sub) return c.json({ error: 'Invalid token payload' }, 401);
+
+    const userId = payload.sub;
+    const agentId = `user-${userId}`;
+    const agent = c.env.KAIROS_AGENT.get(
+      c.env.KAIROS_AGENT.idFromName(agentId)
+    );
+
+    return agent.fetch(c.req.raw);
+  } catch (e) {
+    console.error('❌ Chat error:', e);
+    return c.json({ error: 'Internal error' }, 500);
   }
-
-  if (!payload.sub) {
-    return c.json({ error: 'Invalid token payload' }, 401);
-  }
-
-  const userId = payload.sub;
-
-  // إنشاء أو استعادة وكيل Think للمستخدم
-  const agentId = `user-${userId}`;
-  const agent = c.env.KAIROS_AGENT.get(
-    c.env.KAIROS_AGENT.idFromName(agentId)
-  );
-
-  // تمرير الطلب إلى وكيل Think
-  return agent.fetch(c.req.raw);
 });
 
 // ============================================================
-// ٦. نقاط API الإضافية (متوافقة مع الواجهة الحالية)
+// ٦. نقطة /ask - للتوافق مع الواجهة الحالية
 // ============================================================
-
-// نقطة /ask - للتوافق مع الواجهة الحالية (تُستخدم WebSocket الأفضل)
 app.post('/api/ask', async (c) => {
   try {
     const auth = c.req.header('Authorization');
@@ -232,19 +224,18 @@ app.post('/api/ask', async (c) => {
 
     const token = auth.replace('Bearer ', '');
     const payload = await verify(token, c.env.JWT_SECRET, 'HS256');
-    if (!payload.sub) return c.json({ error: 'Invalid token' }, 401);
+    if (!payload.sub) return c.json({ error: 'Invalid token payload' }, 401);
 
     const userId = payload.sub;
     const { question } = await c.req.json();
     if (!question) return c.json({ error: 'Question required' }, 400);
 
-    // استخدام وكيل Think عبر WebSocket (محاكاة للتوافق)
     const agentId = `user-${userId}`;
     const agent = c.env.KAIROS_AGENT.get(
       c.env.KAIROS_AGENT.idFromName(agentId)
     );
 
-    // استدعاء الوكيل بشكل برمجي
+    // ✅ استخدام agent.chat() بشكل صحيح
     const result = await agent.chat(question);
     return c.json({ answer: result });
   } catch (e) {
@@ -253,7 +244,9 @@ app.post('/api/ask', async (c) => {
   }
 });
 
-// جلب المحادثات السابقة
+// ============================================================
+// ٧. جلب المحادثات السابقة
+// ============================================================
 app.get('/api/conversations', async (c) => {
   try {
     const auth = c.req.header('Authorization');
