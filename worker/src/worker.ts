@@ -1,14 +1,10 @@
 /**
- * نقطة الدخول الرئيسية للـ Worker
+ * نقطة الدخول الرئيسية للـ Worker (مرحلة الحذف)
  */
 
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { sign, verify } from 'hono/jwt';
-import { KairosAgent } from './agent';
-
-// ✅ إعادة تصدير الكلاس المطلوب لـ Durable Objects
-export { KairosAgent };
 
 export type Env = {
   AI: Ai;
@@ -17,7 +13,6 @@ export type Env = {
   RATE_LIMIT_KV: KVNamespace;
   AI_GATEWAY_ID: string;
   CLOUDFLARE_ACCOUNT_ID: string;
-  KAIROS_AGENT: DurableObjectNamespace;
 };
 
 const app = new Hono<{ Bindings: Env }>();
@@ -189,33 +184,7 @@ app.get('/api/auth/me', async (c) => {
 });
 
 // ============================================================
-// ٥. نقطة WebSocket للـ Think Agent
-// ============================================================
-app.get('/api/chat', async (c) => {
-  try {
-    const auth = c.req.header('Authorization');
-    if (!auth) return c.json({ error: 'Unauthorized' }, 401);
-
-    const token = auth.replace('Bearer ', '');
-    const payload = await verify(token, c.env.JWT_SECRET, 'HS256');
-    if (!payload.sub) return c.json({ error: 'Invalid token payload' }, 401);
-
-    const userId = payload.sub;
-    const agentId = `user-${userId}`;
-    const agent = c.env.KAIROS_AGENT.get(
-      c.env.KAIROS_AGENT.idFromName(agentId)
-    );
-
-    return agent.fetch(c.req.raw);
-  } catch (e) {
-    console.error('❌ Chat error:', e);
-    const errorMessage = e instanceof Error ? e.message : 'Unknown error';
-    return c.json({ error: `WebSocket error: ${errorMessage}` }, 500);
-  }
-});
-
-// ============================================================
-// ٦. نقطة /ask - مع دعم Think باستخدام agent.chat()
+// ٥. نقطة /ask - رسالة مؤقتة أثناء الحذف
 // ============================================================
 app.post('/api/ask', async (c) => {
   try {
@@ -243,74 +212,9 @@ app.post('/api/ask', async (c) => {
       }, 200);
     }
 
-    const userId = payload.sub;
-    const { question } = await c.req.json();
-    if (!question) {
-      return c.json({ 
-        answer: '⚠️ خطأ: لم يتم إرسال سؤال (question).'
-      }, 200);
-    }
-
-    if (!c.env.KAIROS_AGENT) {
-      return c.json({ 
-        answer: '⚠️ خطأ في التكوين: KAIROS_AGENT غير موجود. تأكد من إعدادات wrangler.jsonc.'
-      }, 200);
-    }
-
-    const agentId = `user-${userId}`;
-    const agent = c.env.KAIROS_AGENT.get(
-      c.env.KAIROS_AGENT.idFromName(agentId)
-    );
-
-    // ✅ استخدام agent.chat() مباشرة
-    let result;
-    try {
-      if (typeof agent.chat === 'function') {
-        result = await agent.chat(question);
-      } else {
-        // طريقة بديلة عبر fetch داخلي
-        const chatReq = new Request('https://internal/chat', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${token}`,
-          },
-          body: JSON.stringify({
-            messages: [{ role: 'user', content: question }]
-          })
-        });
-        const chatResponse = await agent.fetch(chatReq);
-        const data = await chatResponse.json();
-        result = data?.messages?.[data.messages.length - 1]?.content || 'لم أستطع معالجة طلبك.';
-      }
-    } catch (innerError) {
-      const innerMsg = innerError instanceof Error ? innerError.message : 'Unknown';
-      console.error('❌ agent.chat() error:', innerError);
-      return c.json({ 
-        answer: `⚠️ حدث خطأ أثناء استدعاء الوكيل:\n- الرسالة: ${innerMsg}`
-      }, 200);
-    }
-
-    // حفظ المحادثة في D1 للتوثيق (اختياري)
-    try {
-      const db = c.env.DB;
-      await db
-        .prepare(
-          'INSERT INTO conversations (id, user_id, message, response, created_at) VALUES (?, ?, ?, ?, ?)'
-        )
-        .bind(
-          crypto.randomUUID(),
-          userId,
-          question,
-          result,
-          new Date().toISOString()
-        )
-        .run();
-    } catch (dbError) {
-      console.warn('⚠️ Failed to save conversation:', dbError);
-    }
-
-    return c.json({ answer: result });
+    return c.json({ 
+      answer: `⏳ جاري تهيئة الوكيل الجديد. سيتم الرد على سؤالك قريباً. (تم حذف الكائن القديم وإعادة إنشائه)`
+    });
   } catch (e) {
     const errorMessage = e instanceof Error ? e.message : 'Unknown error';
     console.error('❌ Ask error:', e);
@@ -321,7 +225,7 @@ app.post('/api/ask', async (c) => {
 });
 
 // ============================================================
-// ٧. جلب المحادثات السابقة
+// ٦. جلب المحادثات السابقة
 // ============================================================
 app.get('/api/conversations', async (c) => {
   try {
