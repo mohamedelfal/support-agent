@@ -7,7 +7,6 @@ import { cors } from 'hono/cors';
 import { sign, verify } from 'hono/jwt';
 import { KairosAgent } from './agent';
 
-// ✅ إعادة تصدير الكلاس المطلوب لـ Durable Objects
 export { KairosAgent };
 
 export type Env = {
@@ -215,7 +214,7 @@ app.get('/api/chat', async (c) => {
 });
 
 // ============================================================
-// ٦. نقطة /ask - مع دعم Think باستخدام agent.chat()
+// ٦. نقطة /ask
 // ============================================================
 app.post('/api/ask', async (c) => {
   try {
@@ -262,13 +261,11 @@ app.post('/api/ask', async (c) => {
       c.env.KAIROS_AGENT.idFromName(agentId)
     );
 
-    // ✅ استخدام agent.chat() مباشرة
     let result;
     try {
       if (typeof agent.chat === 'function') {
         result = await agent.chat(question);
       } else {
-        // طريقة بديلة عبر fetch داخلي
         const chatReq = new Request('https://internal/chat', {
           method: 'POST',
           headers: {
@@ -291,7 +288,6 @@ app.post('/api/ask', async (c) => {
       }, 200);
     }
 
-    // حفظ المحادثة في D1 للتوثيق (اختياري)
     try {
       const db = c.env.DB;
       await db
