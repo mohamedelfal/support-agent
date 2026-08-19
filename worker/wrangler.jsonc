@@ -24,10 +24,18 @@
     "CLOUDFLARE_ACCOUNT_ID": "671de8495902b33abba2ad0db58f688a",
     "JWT_SECRET": "your-super-secret-jwt-key-change-this"
   },
-  "exports": {
-    "KairosAgent": {
-      "type": "durable-object",
-      "state": "deleted"
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "KAIROS_AGENT",
+        "class_name": "KairosAgent"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["KairosAgent"]
     }
-  }
+  ]
 }
