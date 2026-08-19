@@ -1,5 +1,6 @@
 /**
  * وكيل دعم فني - Kairos
+ * يعتمد على إطار Think من Cloudflare
  */
 
 import { Think, action } from '@cloudflare/think';
@@ -16,6 +17,7 @@ export class KairosAgent extends Think<Env> {
       );
     } catch (error) {
       console.error('❌ getModel error:', error);
+      // نموذج احتياطي
       return createWorkersAI({ binding: this.env.AI })(
         '@cf/mistral/mistral-small-3.1-24b-instruct'
       );
@@ -28,10 +30,10 @@ export class KairosAgent extends Think<Env> {
 هدفك هو مساعدة العملاء في حل مشكلاتهم التقنية والإدارية.
 
 قواعدك الأساسية:
-1. استخدم اللغة العربية الفصحى فقط.
+1. استخدم اللغة العربية الفصحى فقط، ولا تخلط مع لغات أخرى.
 2. إذا لم تكن متأكداً من الإجابة، قل بوضوح: "ليس لدي معلومات دقيقة حالياً".
 3. تذكر سياق المحادثة ولا تكرر المعلومات.
-4. قدم نفسك في أول رد فقط.
+4. قدم نفسك في أول رد فقط، ولا تكرر التعريف.
 5. استخدم الأدوات المتاحة عند طلب العميل.
 6. إذا طلب العميل إنشاء تذكرة، تأكد من فهم المشكلة جيداً قبل الإنشاء.
 
@@ -64,6 +66,20 @@ export class KairosAgent extends Think<Env> {
     };
   }
 
+  // تفعيل استرداد المحادثة تلقائياً (Chat Recovery)
   chatRecovery = true;
+
+  // عدد الخطوات القصوى للوكيل (منع الحلقات اللانهائية)
   maxSteps = 5;
+
+  // معالجة أخطاء السياق الزائد
+  contextOverflow = {
+    reactive: true,
+    classifyChatError: (error: any) => {
+      if (error.message?.includes('context') || error.message?.includes('token')) {
+        return 'context_overflow';
+      }
+      return null;
+    },
+  };
 }
