@@ -27,7 +27,7 @@
   "exports": {
     "KairosAgent": {
       "type": "durable-object",
-      "state": "deleted"
+      "storage": "sqlite"
     }
   }
 }
